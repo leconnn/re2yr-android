@@ -1,0 +1,63 @@
+id	name(community)	map_uses	param1_kinds	code_evidence(TEvent check 0x71E940)	yrpp_enum_name
+0	No event	4	{'0': 4}		None
+1	Entered by	370	{'0': 370}		EnteredBy
+2	Spied upon	1	{'0': 1}		SpiedBy
+3	Thieved by	0			ThievedBy
+4	Discovered by player	122	{'0': 122}		DiscoveredByPlayer
+5	House discovered	1	{'0': 1}		HouseDiscovered
+6	Attacked by any house	43	{'0': 43}		AttackedByAnybody
+7	Destroyed by any house	27	{'0': 27}		DestroyedByAnybody
+8	Any event	1104	{'0': 1104}		AnyEvent
+9	Destroyed, units, all	18	{'0': 18}	calls=['0049fb60']	DestroyedUnitsAll
+10	Destroyed, buildings, all	33	{'0': 33}		DestroyedBuildingsAll
+11	Destroyed, all	111	{'0': 111}	calls=['0049fb60']	DestroyedAll
+12	Credits exceed	0		this=['0x34']	CreditsExceed
+13	Elapsed time	3213	{'0': 3213}		ElapsedTime
+14	Mission timer expired	20	{'0': 20}		MissionTimerExpired
+15	Destroyed, buildings, #	10	{'0': 10}	this=['0x34']	DestroyedBuildingsNum
+16	Destroyed, units, #	12	{'0': 12}	this=['0x34']	DestroyedUnitsNum
+17	No factories left	15	{'0': 15}		NoFactoriesLeft
+18	Civilians evacuated	0			CiviliansEvacuated
+19	Build building type	39	{'0': 39}		BuildBuildingType
+20	Build unit type	14	{'0': 14}	this=['0x34']	BuildUnitType
+21	Build infantry type	15	{'0': 15}	this=['0x34']	BuildInfantryType
+22	Build aircraft type	1	{'0': 1}	this=['0x34']	BuildAircraftType
+23	Leaves map (team)	0		this=['0x30']	TeamLeavesMap
+24	Zone entry by	0			ZoneEntryBy
+25	Crosses horizontal line	4	{'0': 4}		CrossesHorizontalLine
+26	Crosses vertical line	6	{'0': 6}		CrossesVerticalLine
+27	Global is set	4	{'0': 4}	calls=['00689760']	GlobalSet
+28	Global is clear	6	{'0': 6}	calls=['00689760']	GlobalCleared
+29	Destroyed, all fakes (DestroyedFakesAll)	17	{'0': 17}		DestroyedFakesAll
+30	Low power	13	{'0': 13}	calls=['004fce30']	LowPower
+31	All bridges destroyed	19	{'0': 19}		AllBridgesDestroyed
+32	Building exists	135	{'0': 135}	calls=['0049fae0'] this=['0x34']	BuildingExists
+33	Selected by player	44	{'0': 44}		SelectedByPlayer
+34	Comes near waypoint	2	{'0': 2}		ComesNearWaypoint
+35	Enemy in spotlight	0			EnemyInSpotlight
+36	Local is set	597	{'0': 597}	calls=['00689a00']	LocalSet
+37	Local is clear	389	{'0': 389}	calls=['00689a00']	LocalCleared
+38	First damaged (combat only)	0			FirstDamaged_combatonly
+39	Half health (combat only)	1	{'0': 1}		HalfHealth_combatonly
+40	Quarter health (combat only)	3	{'0': 3}		QuarterHealth_combatonly
+41	First damaged (any source)	4	{'0': 4}		FirstDamaged_anysource
+42	Half health (any source)	0			HalfHealth_anysource
+43	Quarter health (any source)	5	{'0': 5}		QuarterHealth_anysource
+44	Attacked by (house)	33	{'0': 33}		AttackedByHouse
+45	Ambient light <=	7	{'0': 7}	this=['0x34']	AmbientLightBelow
+46	Ambient light >=	7	{'0': 7}	this=['0x34']	AmbientLightAbove
+47	Elapsed scenario time	508	{'0': 508}	this=['0x34']	ElapsedScenarioTime
+48	Destroyed by anything	369	{'0': 369}		DestroyedByAnything
+49	Pickup crate	0			PickupCrate
+50	Pickup crate (any)	1	{'0': 1}		PickupCrate_any
+51	Random delay	253	{'0': 253}		RandomDelay
+52	Credits below	3	{'0': 3}	this=['0x34']	CreditsBelow
+53	Spy as house entering	0			SpyAsHouse
+54	Spy as infantry entering	0			SpyAsInfantry
+55	Destroyed, units, naval	4	{'0': 4}		DestroyedUnitsNaval
+56	Destroyed, units, land	5	{'0': 5}		DestroyedUnitsLand
+57	Building does not exist	151	{'0': 151}	calls=['0049fae0', '00502d30'] this=['0x2c', '0x34']	BuildingDoesNotExist
+58	Power full	7	{'0': 7}	calls=['004fce30']	PowerFull
+59	Entered or overflown by	13	{'0': 13}	calls=['00502d30'] this=['0x34', '0x54']	EnteredOrOverflownBy
+60	Tech type exists	16	{'2': 16}	this=['0x34', '0x38']	TechTypeExists
+61	Tech type does not exist	67	{'2': 67}	this=['0x38']	TechTypeDoesntExist

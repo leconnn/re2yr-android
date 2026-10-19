@@ -1,0 +1,147 @@
+id	name(community)	map_uses	param1_kinds	p2_ref_kinds	code_evidence(TActionClass::Execute 0x6DD8B0)	yrpp_enum_name
+0	No Action	14	{'0': 14}	{'int': 14}		None
+1	Winner is (house)	46	{'0': 46}	{'int': 46}	calls=['004fc9e0[D:\\ra2mdpost\\House.CPP | EVA_YouAreVicto]'] this=['0x90']	Win
+2	Loser is (house)	58	{'0': 58}	{'int': 58}	calls=['004fc9e0[D:\\ra2mdpost\\House.CPP | EVA_YouAreVicto]'] this=['0x90']	Lose
+3	Production begins (house)	86	{'0': 86}	{'int': 86}	calls=['006e45e0'] this=['0x90']	ProductionBegins
+4	Create team (teamtype)	1399	{'1': 1398, '0': 1}	{'teamtype': 1398, 'int': 1}	calls=["006f09c0[Creating a new team named '%s'.\\n | Crea]"] this=['0x30']	CreateTeam
+5	Destroy team (teamtype)	483	{'1': 483}	{'teamtype': 483}	calls=['006f0a70'] this=['0x30']	DestroyTeam
+6	All to hunt (house)	70	{'0': 70}	{'int': 70}	calls=['006e45e0'] this=['0x90']	AllToHunt
+7	Reinforcement (teamtype)	1390	{'1': 1388, '0': 2}	{'teamtype': 1388, 'int': 2}	calls=['0065d8e0[PDPLANE]'] this=['0x30']	Reinforcement
+8	Drop zone flare (waypoint)	0			calls=['006e1cc0']	DropZoneFlare
+9	Fire sale (house)	31	{'0': 31}	{'int': 31}	calls=['006e45e0'] this=['0x90']	FireSale
+10	Play movie	6	{'0': 6}	{'int': 6}	calls=['0072ddb0', '006842f0[Toggle display mode to %d x %d\\n | Toggl]', '005bf260', '0072def0']	PlayMovie
+11	Text trigger (CSF label)	554	{'4': 554}	{'str': 554}	calls=['0069a310', '007c5f00', "00734e60[***NO_STRING*** '%s' -> file:%s line:%d\\]", '005d3ba0'] str=['D__ra2mdpost_TAction_CPP'] this=['0x6d']	TextTrigger
+12	Destroy trigger	92	{'2': 92}	{'trigger': 92}	calls=['00726720'] this=['0x50']	DestroyTrigger
+13	Autocreate begins (house)	0			calls=['006e45e0'] this=['0x90']	AutocreateBegins
+14	Change house (unused in YR)	343	{'0': 343}	{'int': 343}	calls=['006e0aa0']	ChangeHouse
+15	Allow win	0				AllowWin
+16	Reveal all map	16	{'0': 16}	{'int': 16}	calls=['00578350', '00578290', '00653810[PowerClass::v36 (+5 overrides-share)]', '004f42f0[GScreenClass::v14 (+8 overrides-share)]']	RevealAllMap
+17	Reveal around waypoint	715	{'0': 715}	{'int': 715}	calls=['006e0fe0']	RevealAroundWaypoint
+18	Reveal zone of waypoint	5	{'0': 5}	{'int': 5}	calls=['006e11c0']	RevealWaypointZone
+19	Play sound effect	425	{'7': 425}	{'str': 425}	calls=['00750920']	PlaySoundEffect
+20	Play music theme	7	{'8': 7}	{'str': 7}	calls=['00720b20[Theme::QueueSong(%d)\\n]'] this=['0x90']	PlayMusicTheme
+21	Play speech (EVA)	709	{'6': 697, '0': 12}	{'str': 697, 'int': 12}	calls=['00752480']	PlaySpeech
+22	Force trigger	6	{'2': 6}	{'trigger': 6}	calls=['007265c0'] this=['0x50']	ForceTrigger
+23	Timer start	22	{'0': 22}	{'int': 22}	calls=['006d0f00']	TimerStart
+24	Timer stop	6	{'0': 6}	{'int': 6}	calls=['00426630', '006d0f00']	TimerStop
+25	Timer extend	2	{'0': 2}	{'int': 2}	calls=['00426630', '0046b640', '006d0f00'] this=['0x90']	TimerExtend
+26	Timer shorten	0			calls=['00426630', '0046b640', '006d0f00'] this=['0x90']	TimerShorten
+27	Timer set	40	{'0': 40}	{'int': 40}	calls=['0046b640', '006e4790', '006e47c0', '006d0f00'] this=['0x90']	TimerSet
+28	Global set	15	{'0': 15}	{'int': 15}	calls=['00689670'] this=['0x90']	GlobalSet
+29	Global clear	0			calls=['00689670'] this=['0x90']	GlobalClear
+30	Auto base building (house)	0			calls=['0042d470', '0050e000', '0050c210'] this=['0x90']	AutoBaseBuilding
+31	Grow shroud one step	0			calls=['004acac0']	GrowShroud
+32	Destroy attached object	53	{'0': 53}	{'int': 53}	calls=['006e2050']	DestroyAttachedObject
+33	Add 1-time superweapon	0			calls=['006cb560', '006a6300[EVA_NewConstructionOptions]', '006abc60', '006a60a0'] this=['0x90']	AddOneTimeSuperWeapon
+34	Add repeating superweapon	0			calls=['006cb560', '006a6300[EVA_NewConstructionOptions]', '006abc60', '006a60a0'] this=['0x90']	AddRepeatingSuperWeapon
+35	Preferred target	3	{'0': 3}	{'int': 3}	this=['0x90']	PreferredTarget
+36	All change house	70	{'0': 70}	{'int': 70}	calls=['006e0b60']	AllChangeHouse
+37	Make ally	21	{'0': 21}	{'int': 21}	calls=['006e45e0', '004f9b70[D:\\ra2mdpost\\House.CPP | EVA_AllianceReq]'] this=['0x90']	MakeAlly
+38	Make enemy	99	{'0': 99}	{'int': 99}	calls=['006e45e0', '004f9f90[D:\\ra2mdpost\\House.CPP | EVA_AllianceBro]'] this=['0x90']	MakeEnemy
+39	Change zoom level (unused)	0				ChangeZoomLevel
+40	Resize player view	14	{'0': 14}	{'int': 14}	calls=['006e21e0']	ResizePlayerView
+41	Play anim at	79	{'0': 79}	{'int': 79}	calls=['006e2290']	PlayAnimAt
+42	Do explosion at	21	{'0': 21}	{'int': 21}	calls=['006e2390']	DoExplosionAt
+43	Create voxel anim at	0			calls=['006e2520']	CreateVoxelAnim
+44	Ion storm start	1	{'0': 1}	{'int': 1}	calls=['0053a100', '00539eb0[D:\\ra2mdpost\\Ion.cpp | TXT_LIGHTNING_STO]']	IonStormStart
+45	Ion storm stop	0			calls=['0053a100', '0053a090']	IonStormStop
+46	Lock input	57	{'0': 57}	{'int': 57}	calls=['004a8bf0', '004ac8c0', '004ac660', '00684240']	LockInput
+47	Unlock input	52	{'0': 52}	{'int': 52}	calls=['00684290']	UnlockInput
+48	Move camera to waypoint	89	{'0': 89}	{'int': 89}	calls=['0068bcc0', '00642740', '00578080', '005657a0', '006d2420'] this=['0x44', '0x90']	MoveCameraToWaypoint
+49	Zoom in	0			calls=['0054f720', '006938c0[MouseClass::v35 (+1 overrides-share)]', '004f42f0[GScreenClass::v14 (+8 overrides-share)]', '004f4480[GScreenClass::v15 (	ZoomIn
+50	Zoom out	0			calls=['0054f720', '004f42f0[GScreenClass::v14 (+8 overrides-share)]', '004f4480[GScreenClass::v15 (+8 overrides-share)]']	ZoomOut
+51	Reshroud map	15	{'0': 15}	{'int': 15}	calls=['00577c90[We tried to reset the shroud without an ]']	ReshroudMap
+52	Change light behavior	0			calls=['006e5380', '00436be0'] this=['0x90']	ChangeLightBehavior
+53	Enable trigger	3238	{'2': 3233, '0': 5}	{'trigger': 3227, 'int': 6, 'str': 5}	calls=['006e2af0']	EnableTrigger
+54	Disable trigger	2301	{'2': 2292, '0': 9}	{'trigger': 2288, 'int': 5, 'str': 8}	calls=['00726900'] this=['0x50']	DisableTrigger
+55	Create radar event	493	{'0': 493}	{'int': 493}	calls=['0068bcc0', '0065fa70'] this=['0x44']	CreateRadarEvent
+56	Local set	397	{'0': 397}	{'int': 397}	calls=['00689910'] this=['0x90']	LocalSet
+57	Local clear	218	{'0': 218}	{'int': 218}	calls=['00689910'] this=['0x90']	LocalClear
+58	Meteor shower at	9	{'0': 9}	{'int': 9}	calls=['006e2c40[METSMALL | METLARGE]']	MeteorShower
+59	Reduce tiberium (ore) at	0			calls=['0068bcc0', '0057b790'] this=['0x90']	ReduceTiberium
+60	Sell building	20	{'0': 20}	{'int': 20}	calls=['006e5380']	SellBuilding
+61	Turn off building	3	{'0': 3}	{'int': 3}	calls=['006e5380', '00452360[EVA_BuildingOffLine]']	TurnOffBuilding
+62	Turn on building	2	{'0': 2}	{'int': 2}	calls=['006e5380', '00452260[EVA_BuildingOnLine]']	TurnOnBuilding
+63	Apply 100 damage at	124	{'0': 124}	{'int': 124}	calls=['006e0490']	Apply100Damage
+64	Light flash small at	0			calls=['0068bd00', '0048a620'] this=['0x90']	SmallLightFlash
+65	Light flash medium at	1	{'0': 1}	{'int': 1}	calls=['0068bd00', '0048a620'] this=['0x90']	MediumLightFlash
+66	Light flash large at	1	{'0': 1}	{'int': 1}	calls=['0068bd00', '0048a620'] this=['0x90']	LargeLightFlash
+67	Announce win	0			calls=['004fc9e0[D:\\ra2mdpost\\House.CPP | EVA_YouAreVicto]']	AnnounceWin
+68	Announce lose	2	{'0': 2}	{'int': 2}	calls=['004fcbd0[D:\\ra2mdpost\\House.CPP | EVA_YouHaveLost]']	AnnounceLose
+69	Force end	0			calls=['004fcdc0']	ForceEnd
+70	Destroy tag	6	{'3': 6}	{'tag': 6}	this=['0x4c']	DestroyTag
+71	Set ambient step	10	{'0': 10}	{'int': 10}	this=['0x90']	SetAmbientStep
+72	Set ambient rate	10	{'0': 10}	{'int': 10}	this=['0x90']	SetAmbientRate
+73	Set ambient light	12	{'0': 12}	{'int': 12}	calls=['0053a100'] this=['0x90']	SetAmbientLight
+74	AI triggers begin	81	{'0': 81}	{'int': 81}	calls=['006e45e0'] this=['0x90']	AITriggersBegin
+75	AI triggers stop	3	{'0': 3}	{'int': 3}	calls=['006e45e0'] this=['0x90']	AITriggersStop
+76	Ratio of AI trigger teams	0			this=['0x90']	RatioOfAITriggerTeams
+77	Ratio of team aircraft	1	{'0': 1}	{'int': 1}	this=['0x90']	RatioOfTeamAircraft
+78	Ratio of team infantry	1	{'0': 1}	{'int': 1}	this=['0x90']	RatioOfTeamInfantry
+79	Ratio of team units	0			this=['0x90']	RatioOfTeamUnits
+80	Reinforcement (team) at waypoint	598	{'1': 598}	{'teamtype': 598}	calls=['0065d8e0[PDPLANE]'] this=['0x30', '0x44']	ReinforcementAt
+81	Wakeup self	50	{'0': 50}	{'int': 50}	calls=['006e01c0']	WakeupSelf
+82	Wakeup all sleepers	0				WakeupAllSleepers
+83	Wakeup all harmless	0				WakeupAllHarmless
+84	Wakeup group	0			this=['0x90']	WakeupGroup
+85	Vein growth	0			this=['0x90']	VeinGrowth
+86	Tiberium growth	0			this=['0x90']	TiberiumGrowth
+87	Ice growth	0			this=['0x90']	IceGrowth
+88	Particle anim at	21	{'0': 21}	{'int': 21}	calls=['0068bcc0', '00642740', '00578080', '0062dc50[ParticleSystemClass]'] this=['0x44', '0x90']	ParticleAnim
+89	Remove particle anim at	1	{'0': 1}	{'int': 1}	calls=['0068bcc0', '0050e470'] this=['0x44']	RemoveParticleAnim
+90	Lightning strike at	42	{'0': 42}	{'int': 42}	calls=['0068bcc0', '0053a140'] this=['0x44']	LightningStrike
+91	Go berserk	0			calls=['006e5380']	GoBerzerk
+92	Activate firestorm (TS, empty)	0				ActivateFirestorm
+93	Deactivate firestorm (TS, empty)	0				DeactivateFirestorm
+94	Ion cannon strike	0			calls=['0068bcc0', '0041c230', '00578080', '0053cb10'] this=['0x44']	IonCannonStrike
+95	Nuke strike	14	{'0': 14}	{'int': 14}	calls=['006e3410[NukePayload]']	NukeStrike
+96	Chem missile strike	0			calls=['006e38f0[ChemLauncher]']	ChemMissileStrike
+97	Toggle train cargo	0				ToggleTrainCargo
+98	Play sound effect (random)	3	{'7': 3}	{'str': 3}	calls=['004068f0', '0068bd80', '0068bcc0', '0065c7e0', '00642740', '00750e20']	PlaySoundEffectRandom
+99	Play sound effect at waypoint	11578	{'7': 11578}	{'str': 11575, 'int': 3}	calls=['0068bd00', '006e1830', '005f6cb0', '00750e20'] this=['0x44', '0x90']	PlaySoundEffectAtWaypoint
+100	Play ingame movie	85	{'0': 85}	{'int': 85}	calls=['005bf390']	PlayIngameMovie
+101	Reshroud map at	39	{'0': 39}	{'int': 39}	calls=['006e1a70']	ReshroudMapAtWaypoint
+102	Lightning storm strike	20	{'0': 20}	{'int': 20}	calls=['0068bcc0', '0041c230', '00578080', '005657a0', '00413a30', '0053a100'] this=['0x44']	LightningStormStrike
+103	Timer text	24	{'4': 24}	{'str': 24}	calls=['006e4790', "00734e60[***NO_STRING*** '%s' -> file:%s line:%d\\]", '006e47c0', '006d0f00'] str=['D__ra2mdpost_TAction_CPP'] this=['0x6d']	TimerText
+104	Flash team	53	{'5': 53}	{'teamtype': 53}	calls=['006f1f30'] this=['0x30', '0x90']	FlashTeam
+105	Talk bubble	0			calls=['0070f120', '006f1f70'] this=['0x30']	TalkBubble
+106	Set tech level (type, level)	6	{'9': 6}	{'str': 6}	this=['0x54', '0x90']	SetObjectTechLevel
+107	Reinforcement by chrono	96	{'1': 96}	{'teamtype': 96}	calls=['0065ec30'] this=['0x30', '0x44']	ReinforcementByChrono
+108	Create crate	202	{'0': 202}	{'int': 202}	calls=['0068bcc0', '0056bec0'] this=['0x44', '0x90']	CreateCrate
+109	Iron curtain at	0			calls=['006e36e0']	IronCurtain
+110	Pause game for	0			calls=['00684060']	PauseGame
+111	Evict occupants	10	{'0': 10}	{'int': 10}	calls=['006e5380', '00457de0']	EvictOccupiers
+112	Center camera at waypoint	88	{'0': 88}	{'int': 88}	calls=['0068bcc0', '00642740', '00578080', '005657a0', '006d6070'] this=['0x44']	CenterCameraAtWaypoint
+113	Make house cheer	66	{'0': 66}	{'int': 66}	calls=['006e45e0', '0050c8c0'] this=['0x90']	MakeHouseCheer
+114	Set tab to	46	{'0': 46}	{'int': 46}	calls=['006e4100']	SetTabTo
+115	Flash cameo	42	{'9': 42}	{'str': 13, 'int': 29}	calls=['006e4150']	FlashCameo
+116	Stop sounds at	53	{'0': 53}	{'int': 53}	calls=['006e1980']	StopSounds
+117	Play ingame movie (pause)	3	{'0': 3}	{'int': 3}	calls=['005bf390']	PlayIngameMovieAndPause
+118	Clear all smudges	3	{'0': 3}	{'int': 3}	calls=['006e2c20']	ClearAllSmudges
+119	Destroy all of house	9	{'0': 9}	{'int': 9}	calls=['006e3180']	DestroyAll
+120	Destroy all buildings of house	1	{'0': 1}	{'int': 1}	calls=['006e31e0']	DestroyAllBuildings
+121	Destroy all land units of house	12	{'0': 12}	{'int': 12}	calls=['006e3240']	DestroyAllLandUnits
+122	Destroy all naval units of house	6	{'0': 6}	{'int': 6}	calls=['006e32a0']	DestroyAllNavalUnits
+123	Mind control base	0			calls=['006e0ca0']	MindControlBase
+124	Restore mind-controlled base	0			calls=['006e0d00']	RestoreMindControlledBase
+125	Create building at	40	{'10': 40}	{'str': 40}	calls=['006e4200']	CreateBuilding
+126	Restore starting technos	0			calls=['006e30c0']	RestoreStartingUnits
+127	Start chrono screen effect	3	{'0': 3}	{'int': 3}	calls=['0053b460']	StartChronoScreenEffect
+128	Teleport all	5	{'0': 5}	{'int': 5}	calls=['006e1a40']	TeleportAll
+129	Set superweapon charge	4	{'11': 4}	{'int': 4}	calls=['006e42d0']	SetSuperWeaponCharge
+130	Restore starting buildings	15	{'0': 15}	{'int': 15}	calls=['006e3120']	RestoreStartingBuildings
+131	Flash buildings of type	33	{'9': 33}	{'str': 33}	calls=['006e4560']	FlashBuildingsOfType
+132	Superweapon set recharge time	6	{'11': 6}	{'int': 6}	calls=['006e4320']	SuperWeaponSetRechargeTime
+133	Superweapon reset recharge time	0			calls=['006e4360']	SuperWeaponResetRechargeTime
+134	Superweapon reset	0			calls=['006e43a0']	SuperWeaponReset
+135	Set preferred target cell	18	{'0': 18}	{'int': 18}	calls=['006e43e0']	SetPreferredTargetCell
+136	Clear preferred target cell	2	{'0': 2}	{'int': 2}	calls=['006e4440']	ClearPreferredTargetCell
+137	Set base center cell	3	{'0': 3}	{'int': 3}	calls=['006e44e0']	SetBaseCenterCell
+138	Clear base center cell	0			calls=['006e4540']	ClearBaseCenterCell
+139	Blackout radar	12	{'0': 12}	{'int': 12}	calls=['006e3b40']	BlackoutRadar
+140	Set default defense cell	0			calls=['006e4460']	SetDefensiveTargetCell
+141	Clear default defense cell	0			calls=['006e44c0']	ClearDefensiveTargetCell
+142	Retint red	0			calls=['006e2e60']	RetintRed
+143	Retint green	0			calls=['006e2eb0']	RetintGreen
+144	Retint blue	0			calls=['006e2f00']	RetintBlue
+145	Jump camera home	2	{'0': 2}	{'int': 2}	calls=['007315a0']	JumpCameraHome

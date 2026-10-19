@@ -1,0 +1,34 @@
+# The game install is copyrighted and must never be committed.
+Red Alert/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Android / build outputs (the personal bundled APK contains game files; never commit it)
+local.properties
+.gradle/
+build/
+*.apk
+*.aab
+
+# Documentation, reports, plans and notes are private: keep them local, never commit.
+# Only README.md is public.
+*.md
+!/README.md
+
+# Reverse-engineering scripts and material are private.
+# Only the data tables the engine build reads are public.
+/re/*
+!/re/data/
+/re/data/*
+!/re/data/ini_keys.tsv
+!/re/data/drive_tracks.json
+!/re/data/reveal_offsets.json
+!/re/data/slope_planes.json
+!/re/data/voxel_normal_sets.json
+!/re/data/clsid_table.txt
+!/re/data/event_lengths.tsv
+!/re/data/trigger_events.tsv
+!/re/data/trigger_actions.tsv
+!/re/data/script_actions.tsv
