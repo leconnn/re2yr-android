@@ -8,6 +8,8 @@ add_executable(ra_tests
 	formats/compression_test.cpp
 	formats/formats_test.cpp
 	rules/rules_test.cpp
+	sim/loop_test.cpp
+	sim/path_test.cpp
 	game/install_test.cpp
 	vfs/mix_test.cpp
 	voxel/voxel_test.cpp
@@ -18,7 +20,7 @@ target_include_directories(ra_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(ra_tests PRIVATE
 	RA_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 	RA_REPO_ROOT="${PROJECT_SOURCE_DIR}")
-target_link_libraries(ra_tests PRIVATE ra_core ra_vfs ra_ini ra_formats ra_rules ra_world ra_voxel GTest::gtest_main)
+target_link_libraries(ra_tests PRIVATE ra_core ra_vfs ra_ini ra_formats ra_rules ra_world ra_voxel ra_sim GTest::gtest_main)
 ra_set_target_options(ra_tests)
 
 include(GoogleTest)

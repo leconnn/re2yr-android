@@ -114,6 +114,24 @@ add_library(ra_world STATIC
 target_link_libraries(ra_world PUBLIC ra_core ra_ini ra_vfs ra_formats ra_rules)
 ra_set_target_options(ra_world)
 
+# Simulation loop: events, the DoList, the frame CRC, recordings and LogicClass::Update order.
+add_library(ra_sim STATIC
+	sim/loop/event.cpp
+	sim/loop/event.h
+	sim/loop/event_lengths.inc
+	sim/loop/event_queue.cpp
+	sim/loop/event_queue.h
+	sim/loop/frame_crc.h
+	sim/loop/game_loop.cpp
+	sim/loop/game_loop.h
+	sim/loop/recording.cpp
+	sim/loop/recording.h
+	sim/path/astar.cpp
+	sim/path/astar.h
+)
+target_link_libraries(ra_sim PUBLIC ra_core)
+ra_set_target_options(ra_sim)
+
 if(RA_BUILD_APP)
 	# Render: the GPU side of drawing maps and sprites (needs SDL, so only with the app).
 	add_library(ra_render STATIC

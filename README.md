@@ -55,7 +55,7 @@ After the first import, the copied folder can be deleted and the app works offli
 | 1 | Reading the game files | done |
 | 2 | Map display, RA2 and YR selection | done |
 | 3 | Units and buildings on the map | done |
-| 4 | Movement and the game loop | todo |
+| 4 | Movement and the game loop | in progress |
 | 5 | Combat | todo |
 | 6 | Economy and building | todo |
 | 7 | Computer opponent and superweapons | todo |
