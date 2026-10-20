@@ -17,6 +17,7 @@
 #include "rules/rules_db.h"
 #include "sim/world/world.h"
 #include "vfs/vfs.h"
+#include "voxel/voxel_renderer.h"
 
 #include <gtest/gtest.h>
 
@@ -423,6 +424,7 @@ TEST(Install, EveryMapLoadsIntoAWorldWithResolvedTiles)
 
 	const auto maps = all_maps(in);
 	ASSERT_GT(maps.size(), 400u);
+	size_t placed = 0, placed_lines = 0;
 	size_t loaded = 0, cells = 0, no_tile = 0, unresolved = 0, missing_hyte = 0, empty_slot = 0, bad_overlay = 0, terrain_objects = 0;
 	std::map<std::string, int> theaters;
 	std::vector<std::string> failures;
@@ -433,6 +435,9 @@ TEST(Install, EveryMapLoadsIntoAWorldWithResolvedTiles)
 			continue;
 		}
 		const std::string theater = data.theater;
+		for (const char* section : { "Structures", "Units", "Aircraft", "Infantry" })
+			if (const ra::ini::IniSection* sec = data.ini.section(section))
+				placed_lines += sec->entries.size();
 		world::World w;
 		if (!world::World::load(in.vfs, in.base_mounts, rules, std::move(data), w, &error)) {
 			failures.push_back(m.name + " (" + theater + "): " + error);
@@ -441,6 +446,7 @@ TEST(Install, EveryMapLoadsIntoAWorldWithResolvedTiles)
 		++loaded;
 		++theaters[theater];
 		terrain_objects += w.terrain_objects.size();
+		placed += w.placed_objects.size();
 		for (int y = 0; y < world::MapGrid::kSize; ++y) {
 			for (int x = 0; x < world::MapGrid::kSize; ++x) {
 				const world::MapCell& c = w.grid.at(x, y);
@@ -476,9 +482,49 @@ TEST(Install, EveryMapLoadsIntoAWorldWithResolvedTiles)
 	          << ", unresolved tiles " << unresolved << " (plus " << missing_hyte << " missing hyte tiles), empty template slots " << empty_slot << ", overlays out of range " << bad_overlay << ", terrain objects " << terrain_objects << "\n";
 	for (const auto& [t, n] : theaters)
 		std::cout << "  " << t << ": " << n << "\n";
+	std::cout << "Placed objects " << placed << " of " << placed_lines << " map lines\n";
+	EXPECT_GT(placed, 0u);
+	EXPECT_GE(placed * 100, placed_lines * 95); // almost every line names a type the rules know and a cell on the map
 	EXPECT_TRUE(failures.empty());
 	EXPECT_EQ(unresolved, 0u);
 	EXPECT_EQ(no_tile, 0u); // 0xFFFF and out-of-range tile numbers become the clear tile
 	EXPECT_EQ(bad_overlay, 0u);
 	EXPECT_LT(empty_slot * 1000, cells); // a stale tile number here and there, never a pattern
+}
+
+// The Rhino tank body at four facings: sprite sizes and positions worked out from the decoded
+// projection (P3 section 5.1). The size is exact; the offsets can move by a pixel with the original's
+// table-based sine and cosine.
+TEST(Install, RhinoBodyVoxelSpriteHasTheDecodedSizeAndPlace)
+{
+	REQUIRE_INSTALL();
+	Install& in = install();
+	ASSERT_NE(&in, nullptr);
+	const auto vxl_data = in.vfs.open("htnk.vxl");
+	const auto hva_data = in.vfs.open("htnk.hva");
+	const auto vpl_data = in.vfs.open("voxels.vpl");
+	ASSERT_TRUE(vxl_data && hva_data && vpl_data);
+	formats::VxlFile vxl;
+	formats::HvaFile hva;
+	formats::VplFile vpl;
+	ASSERT_TRUE(formats::VxlFile::parse(vxl_data.bytes, vxl));
+	ASSERT_TRUE(formats::HvaFile::parse(hva_data.bytes, hva));
+	ASSERT_TRUE(formats::VplFile::parse(vpl_data.bytes, vpl));
+
+	voxel::Renderer renderer(vpl);
+	const voxel::Section section { &vxl, 0, voxel::hva_matrix(hva, 0, 0, vxl.limbs()[0].scale) };
+	struct Expect { uint16_t facing; int offset_x, offset_y; };
+	const Expect cases[] = { { 0x0000, -29, -28 }, { 0x4000, -29, -25 }, { 0x8000, -33, -25 }, { 0xC000, -33, -28 } };
+	for (const Expect& e : cases) {
+		const voxel::Image img = renderer.render(voxel::body_matrix(e.facing), std::span(&section, 1));
+		ASSERT_FALSE(img.empty());
+		EXPECT_EQ(img.width, 63) << "facing " << e.facing;
+		EXPECT_EQ(img.height, 45) << "facing " << e.facing;
+		EXPECT_NEAR(img.offset_x, e.offset_x, 1) << "facing " << e.facing;
+		EXPECT_NEAR(img.offset_y, e.offset_y, 1) << "facing " << e.facing;
+		size_t lit = 0;
+		for (uint8_t p : img.pixels)
+			lit += p != 0;
+		EXPECT_GT(lit, 600u) << "facing " << e.facing; // a solid tank, not a speckle
+	}
 }

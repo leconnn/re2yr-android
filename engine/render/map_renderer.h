@@ -9,9 +9,12 @@
 
 #include "formats/palette.h"
 #include "formats/shp.h"
+#include "formats/voxel.h"
 #include "render/indexed_atlas.h"
 #include "render/sprite_batch.h"
+#include "sim/world/shroud.h"
 #include "sim/world/world.h"
+#include "voxel/voxel_renderer.h"
 #include "vfs/vfs.h"
 
 #include <memory>
@@ -54,6 +57,9 @@ public:
 	bool draw_overlays = true;
 	bool draw_terrain_objects = true;
 	bool draw_objects = true; // the units, infantry and buildings the map starts with
+
+	// The local player's shroud, drawn over everything; null draws none. Must outlive its use here.
+	void set_shroud(const ra::world::ShroudMap* shroud) { shroud_ = shroud; }
 	bool use_lighting = true;
 
 private:
@@ -74,6 +80,29 @@ private:
 		std::vector<uint8_t> frame_built;
 	};
 
+	// A voxel model: the body, and for tanks the turret and barrel, with their animation matrices.
+	struct VoxelPart {
+		ra::vfs::FileData vxl_data, hva_data;
+		ra::formats::VxlFile vxl;
+		ra::formats::HvaFile hva;
+		bool ok = false;
+	};
+	struct VoxelModel {
+		bool loaded = false;
+		VoxelPart body, turret, barrel;
+		int turret_offset = 0; // leptons, from the art
+	};
+	// A voxel model drawn at one facing, kept as a sprite.
+	struct VoxelSprite {
+		bool built = false;
+		AtlasRect rect;
+		int offset_x = 0, offset_y = 0;
+		AtlasRect shadow;                  // the ground shadow, drawn darkened under the unit
+		int shadow_offset_x = 0, shadow_offset_y = 0;
+	};
+	VoxelModel& voxel_model(const std::string& image);
+	const VoxelSprite& voxel_sprite(const std::string& image, uint16_t body_facing, uint16_t turret_facing);
+
 	// Sprites of buildings, infantry and vehicles (drawn with the unit palette and a house colour).
 	SpriteSet& object_sprite_set(const std::string& image, bool new_theater);
 	// The index of the unit palette with the house colour of 'owner' put in its remap range.
@@ -93,6 +122,18 @@ private:
 	std::unordered_map<std::string, SpriteSet> overlay_sprites_;
 	std::unordered_map<std::string, SpriteSet> terrain_sprites_;
 	std::unordered_map<std::string, SpriteSet> object_sprites_;
+	std::unordered_map<std::string, VoxelModel> voxel_models_;
+	std::unordered_map<std::string, VoxelSprite> voxel_sprites_;
+	const AtlasRect* shroud_frame(int frame);
+	const ra::world::ShroudMap* shroud_ = nullptr;
+	ra::vfs::FileData shroud_data_;
+	ra::formats::ShpFile shroud_shp_;
+	bool shroud_ok_ = false;
+	std::vector<AtlasRect> shroud_frames_;
+	std::vector<uint8_t> shroud_built_;
+	ra::formats::VplFile vpl_;
+	ra::vfs::FileData vpl_data_;
+	bool have_vpl_ = false;
 	ra::formats::Palette unit_colors_;
 	std::vector<std::unique_ptr<PaletteTexture>> house_palettes_;
 	std::unordered_map<std::string, int> house_palette_index_; // lower-case owner name

@@ -73,6 +73,15 @@ add_library(ra_formats STATIC
 target_link_libraries(ra_formats PUBLIC ra_core ra_ini ra_vfs)
 ra_set_target_options(ra_formats)
 
+# Software voxel renderer: VXL/HVA models drawn into palette-indexed sprites.
+add_library(ra_voxel STATIC
+	voxel/voxel_normals.inc
+	voxel/voxel_renderer.cpp
+	voxel/voxel_renderer.h
+)
+target_link_libraries(ra_voxel PUBLIC ra_core ra_formats)
+ra_set_target_options(ra_voxel)
+
 # Rules: the typed INI key table, the rules database and the game definitions.
 add_library(ra_rules STATIC
 	rules/game_def.cpp
@@ -94,6 +103,8 @@ add_library(ra_world STATIC
 	sim/world/land.h
 	sim/world/map_grid.cpp
 	sim/world/map_grid.h
+	sim/world/shroud.cpp
+	sim/world/shroud.h
 	sim/world/slope_planes.inc
 	sim/world/theater_tiles.cpp
 	sim/world/theater_tiles.h
@@ -103,23 +114,24 @@ add_library(ra_world STATIC
 target_link_libraries(ra_world PUBLIC ra_core ra_ini ra_vfs ra_formats ra_rules)
 ra_set_target_options(ra_world)
 
-# Render: the GPU side of drawing maps and sprites.
-add_library(ra_render STATIC
-	render/gl_api.cpp
-	render/gl_api.h
-	render/gl_util.cpp
-	render/gl_util.h
-	render/indexed_atlas.cpp
-	render/indexed_atlas.h
-	render/map_renderer.cpp
-	render/map_renderer.h
-	render/sprite_batch.cpp
-	render/sprite_batch.h
-)
-target_link_libraries(ra_render PUBLIC ra_core ra_formats ra_world ra_rules ra_vfs SDL3::SDL3)
-ra_set_target_options(ra_render)
-
 if(RA_BUILD_APP)
+	# Render: the GPU side of drawing maps and sprites (needs SDL, so only with the app).
+	add_library(ra_render STATIC
+		render/gl_api.cpp
+		render/gl_api.h
+		render/gl_util.cpp
+		render/gl_util.h
+		render/indexed_atlas.cpp
+		render/indexed_atlas.h
+		render/map_renderer.cpp
+		render/map_renderer.h
+		render/sprite_batch.cpp
+		render/sprite_batch.h
+	)
+	target_link_libraries(ra_render PUBLIC ra_core ra_formats ra_world ra_rules ra_vfs ra_voxel SDL3::SDL3)
+	ra_set_target_options(ra_render)
+	
+
 	configure_file(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h @ONLY)
 
 	if(ANDROID)

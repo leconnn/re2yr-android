@@ -44,6 +44,18 @@ void expand_plane(std::span<const uint8_t> packed, std::vector<uint8_t>& out)
 	ra::formats::expand_tile_diamond(packed, out);
 }
 
+// The shroud edge frame for a neighbour pattern (table at 0x7F4194): -1 = fully visible, -2 = fully hidden.
+const int8_t kShroudEdgeFrames[256] = {
+	-1,33,2,2,34,37,2,2,4,26,6,6,4,26,6,6,35,45,17,17,38,41,17,17,4,26,6,6,4,26,6,6,
+	8,21,10,10,27,31,10,10,12,23,14,14,12,23,14,14,8,21,10,10,27,31,10,10,12,23,14,14,12,23,14,14,
+	32,36,25,25,44,40,25,25,19,30,20,20,19,30,20,20,39,43,29,29,42,46,29,29,19,30,20,20,19,30,20,20,
+	8,21,10,10,27,31,10,10,12,23,14,14,12,23,14,14,8,21,10,10,27,31,10,10,12,23,14,14,12,23,14,14,
+	1,1,3,3,16,16,3,3,5,5,7,7,5,5,7,7,24,24,18,18,28,28,18,18,5,5,7,7,5,5,7,7,
+	9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,
+	1,1,3,3,16,16,3,3,5,5,7,7,5,5,7,7,24,24,18,18,28,28,18,18,5,5,7,7,5,5,7,7,
+	9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2
+};
+
 struct Hsv {
 	int h = 0, s = 0, v = 0; // 0..255 each, as the rules write colours
 };
@@ -96,6 +108,12 @@ bool MapRenderer::set_world(const ra::world::World* world, const ra::vfs::Vfs* v
 	overlay_sprites_.clear();
 	terrain_sprites_.clear();
 	object_sprites_.clear();
+	voxel_models_.clear();
+	voxel_sprites_.clear();
+	have_vpl_ = false;
+	shroud_ok_ = false;
+	shroud_frames_.clear();
+	shroud_built_.clear();
 	house_palettes_.clear();
 	house_palette_index_.clear();
 	if (!world || !vfs)
@@ -116,6 +134,14 @@ bool MapRenderer::set_world(const ra::world::World* world, const ra::vfs::Vfs* v
 	ok &= load(world->theater->unit_palette, unit_palette_);
 	if (const auto data = vfs->open(world->theater->unit_palette))
 		ra::formats::parse_palette(data.bytes, unit_colors_);
+	shroud_data_ = vfs->open("shroud.shp");
+	shroud_ok_ = shroud_data_ && ra::formats::ShpFile::parse(shroud_data_.bytes, shroud_shp_);
+	if (shroud_ok_) {
+		shroud_frames_.assign(shroud_shp_.frames().size(), AtlasRect {});
+		shroud_built_.assign(shroud_shp_.frames().size(), 0);
+	}
+	vpl_data_ = vfs->open("voxels.vpl");
+	have_vpl_ = vpl_data_ && ra::formats::VplFile::parse(vpl_data_.bytes, vpl_);
 	return ok;
 }
 
@@ -232,6 +258,100 @@ MapRenderer::SpriteSet& MapRenderer::object_sprite_set(const std::string& image,
 		}
 	}
 	return set;
+}
+
+// A shroud frame is a 60 x 30 diamond whose pixels are darkness values (0..127); 254 is outside the diamond.
+const AtlasRect* MapRenderer::shroud_frame(int frame)
+{
+	if (!shroud_ok_ || frame < 0 || frame >= static_cast<int>(shroud_frames_.size()))
+		return nullptr;
+	if (!shroud_built_[static_cast<size_t>(frame)]) {
+		shroud_built_[static_cast<size_t>(frame)] = 1;
+		std::vector<uint8_t> pixels;
+		const auto& f = shroud_shp_.frames()[static_cast<size_t>(frame)];
+		if (shroud_shp_.decode_frame(static_cast<size_t>(frame), pixels) && !pixels.empty()) {
+			std::vector<uint8_t> coverage(pixels.size());
+			for (size_t i = 0; i < pixels.size(); ++i)
+				coverage[i] = pixels[i] <= 127 ? 255 : 0;
+			shroud_frames_[static_cast<size_t>(frame)] = atlas_.add(f.width, f.height, pixels.data(), coverage.data());
+		}
+	}
+	const AtlasRect& r = shroud_frames_[static_cast<size_t>(frame)];
+	return r.valid() ? &r : nullptr;
+}
+
+MapRenderer::VoxelModel& MapRenderer::voxel_model(const std::string& image)
+{
+	VoxelModel& m = voxel_models_[image];
+	if (m.loaded)
+		return m;
+	m.loaded = true;
+	auto load_part = [&](const std::string& name, VoxelPart& part) {
+		part.vxl_data = vfs_->open(name + ".vxl");
+		part.hva_data = vfs_->open(name + ".hva");
+		part.ok = part.vxl_data && ra::formats::VxlFile::parse(part.vxl_data.bytes, part.vxl);
+		if (part.ok && part.hva_data)
+			ra::formats::HvaFile::parse(part.hva_data.bytes, part.hva);
+	};
+	load_part(image, m.body);
+	load_part(image + "tur", m.turret);
+	load_part(image + "barl", m.barrel);
+	m.turret_offset = world_->rules.art().get_int(image, "TurretOffset", 0);
+	return m;
+}
+
+const MapRenderer::VoxelSprite& MapRenderer::voxel_sprite(const std::string& image, uint16_t body_facing, uint16_t turret_facing)
+{
+	using namespace ra::voxel;
+	const int bf = facing32(body_facing), tf = facing32(turret_facing);
+	const std::string key = image + "|" + std::to_string(bf) + "|" + std::to_string(tf);
+	VoxelSprite& sprite = voxel_sprites_[key];
+	if (sprite.built)
+		return sprite;
+	sprite.built = true;
+	VoxelModel& model = voxel_model(image);
+	if (!model.body.ok || !have_vpl_)
+		return sprite;
+
+	std::vector<Section> sections;
+	auto add_part = [&](const VoxelPart& part, const Mat34& base) {
+		if (!part.ok)
+			return;
+		for (size_t i = 0; i < part.vxl.limbs().size(); ++i) {
+			const Mat34 hva = part.hva.frame_count() ? hva_matrix(part.hva, 0, static_cast<uint32_t>(i), part.vxl.limbs()[i].scale) : identity();
+			sections.push_back({ &part.vxl, i, multiply(base, hva) });
+		}
+	};
+	add_part(model.body, identity());
+	// The turret and barrel sit at the turret offset along the body's front and turn relative to the body.
+	const float offset = static_cast<float>(units_from_leptons(model.turret_offset));
+	const float angle = static_cast<float>(tf - bf) * -0.19634955f;
+	const Mat34 turret = rotate_z(translate_local_x(identity(), offset), angle);
+	add_part(model.turret, turret);
+	add_part(model.barrel, turret);
+
+	Renderer renderer(vpl_);
+	const Image img = renderer.render(body_matrix(body_facing), sections);
+	if (!img.empty()) {
+		sprite.rect = atlas_.add(img.width, img.height, img.pixels.data());
+		sprite.offset_x = img.offset_x;
+		sprite.offset_y = img.offset_y;
+	}
+
+	// The ground shadow. A stand-in for the original's shadow projection (still to be decoded): the
+	// model is flattened onto the ground with a shear that throws the top of the unit toward the
+	// bottom-right of the screen (the way building and tree shadows fall), then drawn as a silhouette.
+	const float kShadowShear = 0.5f;
+	const Mat34 flatten = { 1, 0, kShadowShear, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+	Image shadow = renderer.render(multiply(flatten, body_matrix(body_facing)), sections);
+	if (!shadow.empty()) {
+		for (uint8_t& p : shadow.pixels)
+			p = p ? 1 : 0;
+		sprite.shadow = atlas_.add(shadow.width, shadow.height, shadow.pixels.data());
+		sprite.shadow_offset_x = shadow.offset_x;
+		sprite.shadow_offset_y = shadow.offset_y;
+	}
+	return sprite;
 }
 
 int MapRenderer::house_palette(const std::string& owner)
@@ -373,48 +493,57 @@ void MapRenderer::draw(const View& requested_view)
 			draw_sprite_at(set, frame, cx, cy, info.tiberium ? Tint {} : tint_for_level(c.level), commands, info.tiberium ? PaletteSlot::Object : PaletteSlot::Tile);
 		});
 	}
-	// 3. Terrain objects: trees and rocks, sorted into cell order.
+	// 3. Trees, rocks and the objects the map starts with share one list, drawn from low to high
+	// Sort_Y (the sum of the object's x and y in leptons, P2 section 5.2) so nearer ones cover farther ones.
+	struct Item {
+		const ra::world::PlacedObject* obj;
+		const ra::world::TerrainObject* terrain;
+		int key;
+	};
+	std::vector<Item> items;
 	if (draw_terrain_objects) {
-		std::vector<const ra::world::TerrainObject*> visible;
 		for (const auto& t : w.terrain_objects) {
 			const int u = t.x + t.y, v = t.x - t.y;
-			if (u >= u_min && u <= u_max && v >= v_min && v <= v_max)
-				visible.push_back(&t);
-		}
-		std::stable_sort(visible.begin(), visible.end(), [](const auto* a, const auto* b) { return a->x + a->y < b->x + b->y; });
-		for (const auto* t : visible) {
-			if (!MapGrid::in_grid(t->x, t->y))
-				continue;
-			const ra::world::MapCell& c = grid.at(t->x, t->y);
-			const ra::rules::RuleObject type = w.rules.object(ra::rules::TypeKind::Terrain, t->type);
-			SpriteSet& set = sprite_set(terrain_sprites_, w.rules.image_name(type));
-			if (!set.ok)
-				continue;
-			auto [cx, cy] = cell_center(t->x, t->y, c);
-			const Tint tint = tint_for_level(c.level);
-			// The second half of the frames are the shadows.
-			const int half = static_cast<int>(set.frames.size()) / 2;
-			if (half > 0)
-				draw_sprite_at(set, half, cx, cy, Tint { -1.0f, 0.0f, 0.0f }, commands);
-			draw_sprite_at(set, 0, cx, cy, tint, commands);
+			if (u >= u_min && u <= u_max && v >= v_min && v <= v_max && MapGrid::in_grid(t.x, t.y))
+				items.push_back({ nullptr, &t, u * 256 + 256 });
 		}
 	}
-
-	// 4. The objects the map starts with. Drawn in cell order so nearer ones cover farther ones.
 	if (draw_objects) {
-		struct Item {
-			const ra::world::PlacedObject* obj;
-			int key;
-		};
-		std::vector<Item> items;
 		for (const auto& o : w.placed_objects) {
 			const int u = o.x + o.y, v = o.x - o.y;
-			if (u >= u_min - 8 && u <= u_max + 8 && v >= v_min - 8 && v <= v_max + 8)
-				items.push_back({ &o, u });
+			if (u < u_min - 8 || u > u_max + 8 || v < v_min - 8 || v > v_max + 8)
+				continue;
+			int key = u * 256 + 256; // one cell's centre: (x + 128) + (y + 128)
+			if (o.kind == ra::rules::TypeKind::Building) {
+				// A building's position is the middle of its foundation.
+				int fw = 1, fh = 1;
+				const std::string foundation = w.rules.art().get_string(w.rules.image_name(w.rules.object(o.kind, o.type)), "Foundation");
+				if (!foundation.empty())
+					std::sscanf(foundation.c_str(), "%dx%d", &fw, &fh);
+				key = u * 256 + (fw + fh) * 128;
+			}
+			items.push_back({ &o, nullptr, key });
 		}
-		std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.key < b.key; });
+	}
+	std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.key < b.key; });
+	{
 		using ra::rules::TypeKind;
 		for (const Item& item : items) {
+			if (item.terrain) {
+				const ra::world::TerrainObject* t = item.terrain;
+				const ra::world::MapCell& tc = grid.at(t->x, t->y);
+				const ra::rules::RuleObject type = w.rules.object(ra::rules::TypeKind::Terrain, t->type);
+				SpriteSet& set = sprite_set(terrain_sprites_, w.rules.image_name(type));
+				if (!set.ok)
+					continue;
+				auto [tx, ty] = cell_center(t->x, t->y, tc);
+				// The second half of the frames are the shadows.
+				const int half = static_cast<int>(set.frames.size()) / 2;
+				if (half > 0)
+					draw_sprite_at(set, half, tx, ty, Tint { -1.0f, 0.0f, 0.0f }, commands);
+				draw_sprite_at(set, 0, tx, ty, tint_for_level(tc.level), commands);
+				continue;
+			}
 			const ra::world::PlacedObject& o = *item.obj;
 			const ra::world::MapCell& c = grid.at(o.x, o.y);
 			const ra::rules::RuleObject type = w.rules.object(o.kind, o.type);
@@ -443,7 +572,20 @@ void MapRenderer::draw(const View& requested_view)
 				// The foundation's centre; cell_center() is the centre of one cell.
 				const float bx = cx + float((fw - fh) * 15);
 				const float by = cy + float((fw + fh - 2) * 15) / 2.0f;
-				add(set, 0, bx, by, tint);
+				// The first half of the frames are the building (0 = whole, 1 = damaged), the second half
+				// their shadows. A building at or below ConditionYellow shows the damaged frame.
+				const int count = static_cast<int>(set.frames.size());
+				const bool has_shadows = count >= 2 && count % 2 == 0;
+				const int half = has_shadows ? count / 2 : count;
+				int frame = 0;
+				if (half >= 2) {
+					const double yellow = w.rules.section("AudioVisual").get_double("ConditionYellow");
+					if (double(o.health) / 256.0 <= yellow)
+						frame = 1;
+				}
+				if (has_shadows)
+					add(set, half + frame, bx, by, Tint { -1.0f, 0.0f, 0.0f });
+				add(set, frame, bx, by, tint);
 			} else if (o.kind == TypeKind::Infantry) {
 				SpriteSet& set = object_sprite_set(image, false);
 				if (!set.ok)
@@ -467,8 +609,44 @@ void MapRenderer::draw(const View& requested_view)
 				}
 				const int dir8 = static_cast<int>(ra::Dir16(static_cast<uint16_t>(o.facing << 8)).facing<8>());
 				add(set, start + dir8 * step, cx + ox, cy + oy, tint);
+			} else if (o.kind == TypeKind::Vehicle || o.kind == TypeKind::Aircraft) {
+				if (!w.rules.art().get_bool(image, "Voxel"))
+					continue;
+				const uint16_t facing = static_cast<uint16_t>(o.facing << 8);
+				const VoxelSprite& sprite = voxel_sprite(image, facing, facing);
+				if (sprite.shadow.valid())
+					commands.push_back({ sprite.shadow, cx + float(sprite.shadow_offset_x), cy + float(sprite.shadow_offset_y), Tint { -1.0f, 0.0f, 0.0f }, PaletteSlot::Unit, house });
+				if (sprite.rect.valid())
+					commands.push_back({ sprite.rect, cx + float(sprite.offset_x), cy + float(sprite.offset_y), tint, PaletteSlot::Unit, house });
 			}
 		}
+	}
+
+	// 5. The shroud, over everything. A cell's frame comes from which of its eight neighbours are hidden
+	// (TacticalClass::GetOcclusion 0x6D8700); a hidden cell is solid black.
+	if (shroud_) {
+		const ra::world::ShroudMap& shroud = *shroud_;
+		// bit for each neighbour: NW 0x40, N 0x80, NE 0x01, W 0x20, E 0x02, SW 0x10, S 0x08, SE 0x04
+		static const struct { int dx, dy, bit; } kNeighbours[8] = {
+			{ -1, -1, 0x40 }, { 0, -1, 0x80 }, { 1, -1, 0x01 }, { -1, 0, 0x20 }, { 1, 0, 0x02 }, { -1, 1, 0x10 }, { 0, 1, 0x08 }, { 1, 1, 0x04 },
+		};
+		each_visible_cell([&](int x, int y, const ra::world::MapCell& c) {
+			int frame;
+			if (!shroud.revealed(x, y)) {
+				frame = 0;
+			} else {
+				int bits = 0;
+				for (const auto& n : kNeighbours)
+					if (!shroud.revealed(x + n.dx, y + n.dy))
+						bits |= n.bit;
+				const int f = kShroudEdgeFrames[bits];
+				if (f == -1)
+					return;
+				frame = f == -2 ? 0 : f;
+			}
+			if (const AtlasRect* r = shroud_frame(frame))
+				commands.push_back({ *r, float((x - y) * 30 - 30), float((x + y) * 15 - c.level * ra::world::kPixelsPerLevel), Tint { -2.0f, 0.0f, 0.0f }, PaletteSlot::Tile });
+		});
 	}
 
 	// Submit.

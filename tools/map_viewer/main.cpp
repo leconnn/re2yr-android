@@ -83,6 +83,8 @@ struct App {
 	float last_frame_ms = 16.0f;
 	uint64_t last_counter = 0;
 	bool show_ui = true;
+	world::ShroudMap shroud;
+	bool show_shroud = false;
 	std::string screenshot_path; // when set: draw a few frames, save the picture and exit
 	int frames = 0;
 };
@@ -107,6 +109,30 @@ void center_view(App& app)
 	app.view.scroll_y = (b.top + b.bottom) * 0.5f - float(app.view.height) / (2.0f * app.view.zoom);
 }
 
+// A demonstration of the shroud: everything hidden except around the objects of the first player
+// house the map places, each revealing a circle of its sight radius.
+void update_shroud(App& app)
+{
+	app.renderer->set_shroud(app.show_shroud ? &app.shroud : nullptr);
+	if (!app.show_shroud || !app.world)
+		return;
+	app.shroud.hide_all();
+	std::string owner;
+	for (const auto& o : app.world->placed_objects) {
+		const std::string l = lower(o.owner);
+		if (l != "neutral" && l != "special") {
+			owner = o.owner;
+			break;
+		}
+	}
+	for (const auto& o : app.world->placed_objects) {
+		if (!owner.empty() && lower(o.owner) != lower(owner))
+			continue; // (a map with only neutral objects reveals around all of them)
+		const int sight = app.world->rules.object(o.kind, o.type).get_int("Sight");
+		app.shroud.reveal_area(o.x, o.y, sight > 0 ? sight : 5);
+	}
+}
+
 bool load_map_entry(App& app, int index)
 {
 	const MapEntry& entry = app.maps[static_cast<size_t>(index)];
@@ -125,6 +151,7 @@ bool load_map_entry(App& app, int index)
 		RA_LOG_WARN("some palettes could not be loaded");
 	app.world = std::move(next);
 	app.selected = index;
+	update_shroud(app);
 	app.status.clear();
 	center_view(app);
 	return true;
@@ -139,6 +166,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 	std::string open_map;
 	float zoom = 1.0f;
 	bool have_center = false;
+	bool start_shroud = false;
 	float center_x = 0, center_y = 0;
 	auto* app = new App();
 	*appstate = app;
@@ -157,6 +185,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 			app->show_ui = true;
 		else if (a == "--zoom" && i + 1 < argc)
 			zoom = static_cast<float>(std::atof(argv[++i]));
+		else if (a == "--shroud")
+			start_shroud = true;
 		else if (a == "--center" && i + 1 < argc) {
 			have_center = std::sscanf(argv[++i], "%f,%f", &center_x, &center_y) == 2;
 		} else
@@ -240,6 +270,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 	ImGui_ImplOpenGL3_Init(app->gles ? "#version 300 es" : "#version 330 core");
 
 	app->view.zoom = zoom;
+	app->show_shroud = start_shroud;
 	int w = 0, h = 0;
 	SDL_GetWindowSizeInPixels(app->window, &w, &h);
 	app->view.width = w;
@@ -418,6 +449,8 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 		ImGui::Checkbox("Objects", &app->renderer->draw_objects);
 		ImGui::SameLine();
 		ImGui::Checkbox("Lighting", &app->renderer->use_lighting);
+		if (ImGui::Checkbox("Shroud", &app->show_shroud))
+			update_shroud(*app);
 		ImGui::End();
 	}
 	ImGui::Render();

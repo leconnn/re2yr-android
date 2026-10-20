@@ -1,5 +1,6 @@
 #include "sim/world/land.h"
 #include "sim/world/map_grid.h"
+#include "sim/world/shroud.h"
 #include "sim/world/theater_tiles.h"
 #include "sim/world/world.h"
 
@@ -76,4 +77,36 @@ TEST(MapGrid, DiamondAndOffMapCells)
 	EXPECT_EQ(grid.at(10, 20).level, 2);
 	// A point in the middle of that cell: level 2 plus half a ramp.
 	EXPECT_EQ(grid.ground_height({ 10 * 256 + 128, 20 * 256 + 50, 0 }), 2 * 104 + 52);
+}
+
+TEST(Shroud, RevealUsesTheOriginalsCircleTable)
+{
+	auto count = [](int radius) {
+		ShroudMap shroud;
+		shroud.reveal_area(256, 256, radius);
+		int n = 0;
+		for (int y = 240; y < 272; ++y)
+			for (int x = 240; x < 272; ++x)
+				n += shroud.revealed(x, y);
+		return n;
+	};
+	// N[r] = 1, 9, 21, 37, 61, 89, 121, 161, 205, 253, 309, 369: the table is not a perfect circle (r = 2 has 21 cells, not 25).
+	const int expected[] = { 1, 9, 21, 37, 61, 89, 121, 161, 205, 253, 309, 369 };
+	for (int r = 0; r <= 10; ++r)
+		EXPECT_EQ(count(r), expected[r]) << "radius " << r;
+	EXPECT_EQ(count(15), expected[10]); // the radius is clamped to 10
+}
+
+TEST(Shroud, StartsHiddenAndKeepsToTheGrid)
+{
+	ShroudMap shroud;
+	EXPECT_FALSE(shroud.revealed(10, 10));
+	shroud.reveal_area(0, 0, 3); // partly off the grid
+	EXPECT_TRUE(shroud.revealed(0, 0));
+	EXPECT_TRUE(shroud.revealed(3, 0));
+	EXPECT_FALSE(shroud.revealed(-1, 0));
+	shroud.reveal_all();
+	EXPECT_TRUE(shroud.revealed(511, 511));
+	shroud.hide_all();
+	EXPECT_FALSE(shroud.revealed(511, 511));
 }

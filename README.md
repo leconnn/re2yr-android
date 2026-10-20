@@ -54,7 +54,7 @@ After the first import, the copied folder can be deleted and the app works offli
 | 0 | Project setup | done |
 | 1 | Reading the game files | done |
 | 2 | Map display, RA2 and YR selection | done |
-| 3 | Units and buildings on the map | in progress |
+| 3 | Units and buildings on the map | done |
 | 4 | Movement and the game loop | todo |
 | 5 | Combat | todo |
 | 6 | Economy and building | todo |
@@ -65,7 +65,7 @@ After the first import, the copied folder can be deleted and the app works offli
 | 11 | Multiplayer | todo |
 | 12 | Release | todo |
 
-**Overall: 3 of 13 phases done (23%).**
+**Overall: 4 of 13 phases done (31%).**
 
 ## Legal
 - This is an unofficial, fan-made project. It is not affiliated with or endorsed by Electronic Arts.

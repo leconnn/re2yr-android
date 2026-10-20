@@ -38,6 +38,12 @@ void main()
 	vec4 t = texelFetch(u_atlas, ivec2(floor(v_uv)), 0);
 	if (t.g < 0.5)
 		discard;
+	// A tint of -2 marks a shroud edge: black whose opacity is the pixel value / 127.
+	if (v_tint.r < -1.5) {
+		int v = int(floor(t.r * 255.0 + 0.5));
+		o_color = vec4(0.0, 0.0, 0.0, min(float(v) / 127.0, 1.0));
+		return;
+	}
 	// A negative tint marks a shadow: half-dark black over what is already there.
 	if (v_tint.r < 0.0) {
 		o_color = vec4(0.0, 0.0, 0.0, 0.5);
