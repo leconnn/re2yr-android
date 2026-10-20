@@ -9,6 +9,7 @@ add_executable(ra_tests
 	formats/formats_test.cpp
 	rules/rules_test.cpp
 	sim/loop_test.cpp
+	sim/objects_test.cpp
 	sim/path_test.cpp
 	game/install_test.cpp
 	vfs/mix_test.cpp

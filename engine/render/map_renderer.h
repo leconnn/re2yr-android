@@ -12,6 +12,7 @@
 #include "formats/voxel.h"
 #include "render/indexed_atlas.h"
 #include "render/sprite_batch.h"
+#include "sim/objects/simulation.h"
 #include "sim/world/shroud.h"
 #include "sim/world/world.h"
 #include "voxel/voxel_renderer.h"
@@ -57,6 +58,10 @@ public:
 	bool draw_overlays = true;
 	bool draw_terrain_objects = true;
 	bool draw_objects = true; // the units, infantry and buildings the map starts with
+
+	// Draws the objects of a running simulation (at their exact positions) instead of the map's starting
+	// objects. Null goes back to the map's objects. Must outlive its use here.
+	void set_simulation(const ra::sim::Simulation* sim) { sim_ = sim; }
 
 	// The local player's shroud, drawn over everything; null draws none. Must outlive its use here.
 	void set_shroud(const ra::world::ShroudMap* shroud) { shroud_ = shroud; }
@@ -126,6 +131,7 @@ private:
 	std::unordered_map<std::string, VoxelSprite> voxel_sprites_;
 	const AtlasRect* shroud_frame(int frame);
 	const ra::world::ShroudMap* shroud_ = nullptr;
+	const ra::sim::Simulation* sim_ = nullptr;
 	ra::vfs::FileData shroud_data_;
 	ra::formats::ShpFile shroud_shp_;
 	bool shroud_ok_ = false;

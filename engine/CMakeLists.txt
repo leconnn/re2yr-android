@@ -114,7 +114,7 @@ add_library(ra_world STATIC
 target_link_libraries(ra_world PUBLIC ra_core ra_ini ra_vfs ra_formats ra_rules)
 ra_set_target_options(ra_world)
 
-# Simulation loop: events, the DoList, the frame CRC, recordings and LogicClass::Update order.
+# Simulation: events, the DoList, the frame CRC, recordings, LogicClass::Update order, objects and pathfinding.
 add_library(ra_sim STATIC
 	sim/loop/event.cpp
 	sim/loop/event.h
@@ -126,10 +126,20 @@ add_library(ra_sim STATIC
 	sim/loop/game_loop.h
 	sim/loop/recording.cpp
 	sim/loop/recording.h
+	sim/objects/drive_tracks.cpp
+	sim/objects/drive_tracks.h
+	sim/objects/drive_tracks.inc
+	sim/objects/object.h
+	sim/objects/selection.cpp
+	sim/objects/selection.h
+	sim/objects/simulation.cpp
+	sim/objects/simulation.h
+	sim/objects/type_info.cpp
+	sim/objects/type_info.h
 	sim/path/astar.cpp
 	sim/path/astar.h
 )
-target_link_libraries(ra_sim PUBLIC ra_core)
+target_link_libraries(ra_sim PUBLIC ra_core ra_rules ra_world)
 ra_set_target_options(ra_sim)
 
 if(RA_BUILD_APP)
@@ -146,7 +156,7 @@ if(RA_BUILD_APP)
 		render/sprite_batch.cpp
 		render/sprite_batch.h
 	)
-	target_link_libraries(ra_render PUBLIC ra_core ra_formats ra_world ra_rules ra_vfs ra_voxel SDL3::SDL3)
+	target_link_libraries(ra_render PUBLIC ra_core ra_formats ra_world ra_rules ra_vfs ra_voxel ra_sim SDL3::SDL3)
 	ra_set_target_options(ra_render)
 	
 

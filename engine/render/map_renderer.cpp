@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <tuple>
 
 namespace ra::render {
 
@@ -54,6 +55,19 @@ const int8_t kShroudEdgeFrames[256] = {
 	9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,
 	1,1,3,3,16,16,3,3,5,5,7,7,5,5,7,7,24,24,18,18,28,28,18,18,5,5,7,7,5,5,7,7,
 	9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2,9,9,11,11,22,22,11,11,13,13,-2,-2,13,13,-2,-2
+};
+
+// One object to draw: the map's starting objects and a running simulation's objects both become these.
+struct DrawObj {
+	ra::rules::TypeKind kind;
+	int type;
+	const std::string* owner;
+	int health;   // 0..256
+	int facing;   // 0..255
+	int sub_cell;
+	int x, y;     // the cell
+	bool precise; // true: the position in leptons below is exact (a running simulation)
+	int lx, ly, lz;
 };
 
 struct Hsv {
@@ -496,10 +510,27 @@ void MapRenderer::draw(const View& requested_view)
 	// 3. Trees, rocks and the objects the map starts with share one list, drawn from low to high
 	// Sort_Y (the sum of the object's x and y in leptons, P2 section 5.2) so nearer ones cover farther ones.
 	struct Item {
-		const ra::world::PlacedObject* obj;
+		const DrawObj* obj;
 		const ra::world::TerrainObject* terrain;
 		int key;
 	};
+	std::vector<DrawObj> draw_objs;
+	if (draw_objects) {
+		if (sim_) {
+			draw_objs.reserve(sim_->objects().size());
+			for (const auto& o : sim_->objects()) {
+				if (!o.alive || o.in_limbo)
+					continue;
+				const auto& t = sim_->info(o);
+				draw_objs.push_back({ o.kind, o.type, &sim_->house(o.house).name, t.strength > 0 ? std::min(256, o.health * 256 / t.strength) : 256,
+				                      int(o.body.raw >> 8), o.sub_cell, o.cell().x, o.cell().y, true, o.location.x, o.location.y, o.location.z });
+			}
+		} else {
+			draw_objs.reserve(w.placed_objects.size());
+			for (const auto& o : w.placed_objects)
+				draw_objs.push_back({ o.kind, o.type, &o.owner, o.health, o.facing, o.sub_cell, o.x, o.y, false, 0, 0, 0 });
+		}
+	}
 	std::vector<Item> items;
 	if (draw_terrain_objects) {
 		for (const auto& t : w.terrain_objects) {
@@ -508,22 +539,22 @@ void MapRenderer::draw(const View& requested_view)
 				items.push_back({ nullptr, &t, u * 256 + 256 });
 		}
 	}
-	if (draw_objects) {
-		for (const auto& o : w.placed_objects) {
-			const int u = o.x + o.y, v = o.x - o.y;
-			if (u < u_min - 8 || u > u_max + 8 || v < v_min - 8 || v > v_max + 8)
-				continue;
-			int key = u * 256 + 256; // one cell's centre: (x + 128) + (y + 128)
-			if (o.kind == ra::rules::TypeKind::Building) {
-				// A building's position is the middle of its foundation.
-				int fw = 1, fh = 1;
-				const std::string foundation = w.rules.art().get_string(w.rules.image_name(w.rules.object(o.kind, o.type)), "Foundation");
-				if (!foundation.empty())
-					std::sscanf(foundation.c_str(), "%dx%d", &fw, &fh);
-				key = u * 256 + (fw + fh) * 128;
-			}
-			items.push_back({ &o, nullptr, key });
+	for (const auto& o : draw_objs) {
+		if (!MapGrid::in_grid(o.x, o.y))
+			continue;
+		const int u = o.x + o.y, v = o.x - o.y;
+		if (u < u_min - 8 || u > u_max + 8 || v < v_min - 8 || v > v_max + 8)
+			continue;
+		int key = o.precise ? o.lx + o.ly : u * 256 + 256; // one cell's centre: (x + 128) + (y + 128)
+		if (o.kind == ra::rules::TypeKind::Building) {
+			// A building's position is the middle of its foundation.
+			int fw = 1, fh = 1;
+			const std::string foundation = w.rules.art().get_string(w.rules.image_name(w.rules.object(o.kind, o.type)), "Foundation");
+			if (!foundation.empty())
+				std::sscanf(foundation.c_str(), "%dx%d", &fw, &fh);
+			key = u * 256 + (fw + fh) * 128;
 		}
+		items.push_back({ &o, nullptr, key });
 	}
 	std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.key < b.key; });
 	{
@@ -544,14 +575,20 @@ void MapRenderer::draw(const View& requested_view)
 				draw_sprite_at(set, 0, tx, ty, tint_for_level(tc.level), commands);
 				continue;
 			}
-			const ra::world::PlacedObject& o = *item.obj;
+			const DrawObj& o = *item.obj;
 			const ra::world::MapCell& c = grid.at(o.x, o.y);
 			const ra::rules::RuleObject type = w.rules.object(o.kind, o.type);
 			const std::string image = w.rules.image_name(type);
 			const ra::rules::RuleObject art = w.rules.art_section(image);
-			const int house = house_palette(o.owner);
+			const int house = house_palette(*o.owner);
 			const Tint tint = tint_for_level(c.level);
-			auto [cx, cy] = cell_center(o.x, o.y, c);
+			float cx, cy;
+			if (o.precise) {
+				cx = float(o.lx - o.ly) * 30.0f / 256.0f;
+				cy = float(o.lx + o.ly) * 15.0f / 256.0f - float(ra::world::height_to_pixels(o.lz));
+			} else {
+				std::tie(cx, cy) = cell_center(o.x, o.y, c);
+			}
 
 			auto add = [&](SpriteSet& set, int frame, float px, float py, Tint t) {
 				const AtlasRect* r = sprite_frame(set, frame);
@@ -592,7 +629,7 @@ void MapRenderer::draw(const View& requested_view)
 					continue;
 				// The cell's spots: 0 = centre, 2, 3, 4 = the others (offsets are a first approximation).
 				float ox = 0, oy = 0;
-				switch (o.sub_cell) {
+				switch (o.precise ? 0 : o.sub_cell) {
 				case 2: ox = -15; oy = 0; break;
 				case 3: ox = 15; oy = 0; break;
 				case 4: ox = 0; oy = 8; break;

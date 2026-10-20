@@ -20,6 +20,9 @@
 #include "render/map_renderer.h"
 #include "render/sprite_batch.h"
 #include "rules/rules_db.h"
+#include "sim/loop/game_loop.h"
+#include "sim/objects/selection.h"
+#include "sim/objects/simulation.h"
 #include "sim/world/world.h"
 #include "common/display.h"
 #include "vfs/vfs.h"
@@ -76,6 +79,19 @@ struct App {
 	std::string status;
 
 	std::unique_ptr<world::World> world;
+
+	// Simulation mode (--simulate): the game loop runs on the map's objects; left click or drag selects,
+	// right click orders a move, X stops, space pauses, the middle button pans.
+	bool simulate = false;
+	bool paused = false;
+	Random2 sim_rng { 1 };
+	std::unique_ptr<sim::Simulation> sim;
+	std::unique_ptr<sim::GameLoop> loop;
+	sim::Selection selection;
+	int local_house = 0;
+	double sim_accum_ms = 0.0;
+	bool selecting = false;
+	float select_x0 = 0, select_y0 = 0, mouse_x = 0, mouse_y = 0; // window pixels
 	// Destroyed before the GL context (its destructors call OpenGL).
 	std::unique_ptr<render::MapRenderer> renderer = std::make_unique<render::MapRenderer>();
 	render::View view;
@@ -109,10 +125,57 @@ void center_view(App& app)
 	app.view.scroll_y = (b.top + b.bottom) * 0.5f - float(app.view.height) / (2.0f * app.view.zoom);
 }
 
+// Builds the simulation for the current map and makes the first player house the local one.
+void build_simulation(App& app)
+{
+	app.renderer->set_simulation(nullptr);
+	app.loop.reset();
+	app.sim.reset();
+	app.selection.clear();
+	if (!app.simulate || !app.world)
+		return;
+	app.sim_rng = Random2(1);
+	app.sim = std::make_unique<sim::Simulation>(*app.world, app.sim_rng);
+	app.sim->spawn_placed_objects();
+	// The local player: the owner of the first object that isn't neutral; on a map with only neutral
+	// objects, the first owner.
+	std::string owner;
+	for (const auto& o : app.world->placed_objects) {
+		const std::string l = lower(o.owner);
+		if (l != "neutral" && l != "special") {
+			owner = o.owner;
+			break;
+		}
+	}
+	if (owner.empty() && !app.world->placed_objects.empty())
+		owner = app.world->placed_objects.front().owner;
+	app.local_house = app.sim->house_index(owner.empty() ? "Neutral" : owner);
+	app.sim->set_local_house(app.local_house);
+	app.loop = std::make_unique<sim::GameLoop>(*app.sim, app.sim_rng);
+	app.sim->attach(*app.loop);
+	for (const auto& o : app.sim->objects())
+		if (o.house == app.local_house)
+			app.sim->reveal_around(o);
+	app.renderer->set_simulation(app.sim.get());
+	app.sim_accum_ms = 0.0;
+}
+
+// The lepton position under a window pixel, on flat ground.
+Coord pixel_to_leptons(const App& app, float px, float py)
+{
+	const float wx = app.view.scroll_x + px / app.view.zoom, wy = app.view.scroll_y + py / app.view.zoom;
+	const double sum = double(wy) * 256.0 / 15.0, diff = double(wx) * 256.0 / 30.0;
+	return { int((sum + diff) / 2.0), int((sum - diff) / 2.0), 0 };
+}
+
 // A demonstration of the shroud: everything hidden except around the objects of the first player
 // house the map places, each revealing a circle of its sight radius.
 void update_shroud(App& app)
 {
+	if (app.sim) {
+		app.renderer->set_shroud(app.show_shroud ? &app.sim->shroud() : nullptr);
+		return;
+	}
 	app.renderer->set_shroud(app.show_shroud ? &app.shroud : nullptr);
 	if (!app.show_shroud || !app.world)
 		return;
@@ -151,6 +214,7 @@ bool load_map_entry(App& app, int index)
 		RA_LOG_WARN("some palettes could not be loaded");
 	app.world = std::move(next);
 	app.selected = index;
+	build_simulation(app);
 	update_shroud(app);
 	app.status.clear();
 	center_view(app);
@@ -167,6 +231,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 	float zoom = 1.0f;
 	bool have_center = false;
 	bool start_shroud = false;
+	bool start_simulate = false;
 	float center_x = 0, center_y = 0;
 	auto* app = new App();
 	*appstate = app;
@@ -187,6 +252,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 			zoom = static_cast<float>(std::atof(argv[++i]));
 		else if (a == "--shroud")
 			start_shroud = true;
+		else if (a == "--simulate")
+			start_simulate = true;
 		else if (a == "--center" && i + 1 < argc) {
 			have_center = std::sscanf(argv[++i], "%f,%f", &center_x, &center_y) == 2;
 		} else
@@ -271,6 +338,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 
 	app->view.zoom = zoom;
 	app->show_shroud = start_shroud;
+	app->simulate = start_simulate;
 	int w = 0, h = 0;
 	SDL_GetWindowSizeInPixels(app->window, &w, &h);
 	app->view.width = w;
@@ -302,15 +370,49 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 	case SDL_EVENT_QUIT:
 	case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
 		return SDL_APP_SUCCESS;
-	case SDL_EVENT_MOUSE_BUTTON_DOWN:
-		if (event->button.button == SDL_BUTTON_LEFT && !ui_wants_mouse)
+	case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+		const float scale = SDL_GetWindowPixelDensity(app->window);
+		const float px = event->button.x * scale, py = event->button.y * scale;
+		if (app->sim && !ui_wants_mouse) {
+			if (event->button.button == SDL_BUTTON_LEFT) {
+				app->selecting = true;
+				app->select_x0 = px;
+				app->select_y0 = py;
+			} else if (event->button.button == SDL_BUTTON_MIDDLE) {
+				app->dragging = true;
+			} else if (event->button.button == SDL_BUTTON_RIGHT && app->loop && !app->selection.empty()) {
+				const Coord at = pixel_to_leptons(*app, px, py);
+				const Cell cell = cell_of(at);
+				if (world::MapGrid::in_grid(cell.x, cell.y))
+					for (const sim::Event& e : app->selection.move_orders(*app->sim, app->local_house, cell))
+						app->loop->issue(e);
+			}
+		} else if (event->button.button == SDL_BUTTON_LEFT && !ui_wants_mouse) {
 			app->dragging = true;
+		}
 		break;
-	case SDL_EVENT_MOUSE_BUTTON_UP:
-		if (event->button.button == SDL_BUTTON_LEFT)
+	}
+	case SDL_EVENT_MOUSE_BUTTON_UP: {
+		const float scale = SDL_GetWindowPixelDensity(app->window);
+		const float px = event->button.x * scale, py = event->button.y * scale;
+		if (app->sim && event->button.button == SDL_BUTTON_LEFT && app->selecting) {
+			app->selecting = false;
+			const bool add = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+			if (std::abs(px - app->select_x0) < 4.0f && std::abs(py - app->select_y0) < 4.0f)
+				app->selection.click(*app->sim, app->local_house, pixel_to_leptons(*app, px, py), 160, add);
+			else
+				app->selection.box(*app->sim, app->local_house, pixel_to_leptons(*app, app->select_x0, app->select_y0), pixel_to_leptons(*app, px, py), add);
+		}
+		if (event->button.button == SDL_BUTTON_LEFT || event->button.button == SDL_BUTTON_MIDDLE)
 			app->dragging = false;
 		break;
+	}
 	case SDL_EVENT_MOUSE_MOTION:
+		{
+			const float scale = SDL_GetWindowPixelDensity(app->window);
+			app->mouse_x = event->motion.x * scale;
+			app->mouse_y = event->motion.y * scale;
+		}
 		if (app->dragging) {
 			const float scale = SDL_GetWindowPixelDensity(app->window);
 			app->view.scroll_x -= event->motion.xrel * scale / app->view.zoom;
@@ -336,6 +438,11 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 			app->show_ui = !app->show_ui;
 		if (event->key.key == SDLK_C)
 			center_view(*app);
+		if (app->sim && event->key.key == SDLK_X && app->loop)
+			for (const sim::Event& e : app->selection.stop_orders(*app->sim, app->local_house))
+				app->loop->issue(e);
+		if (app->sim && event->key.key == SDLK_SPACE)
+			app->paused = !app->paused;
 		break;
 	default:
 		break;
@@ -397,6 +504,19 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 			app->view.scroll_y += speed;
 	}
 
+	// The simulation: one frame per GameSpeed 4 tick period (64 ms), as the original's skirmish default.
+	if (app->sim && app->loop && !app->paused) {
+		app->sim_accum_ms += double(app->last_frame_ms);
+		int steps = 0;
+		while (app->sim_accum_ms >= 64.0 && steps < 4) {
+			app->loop->run_frame();
+			app->sim_accum_ms -= 64.0;
+			++steps;
+		}
+		if (steps == 4)
+			app->sim_accum_ms = 0.0; // fell behind: the original never runs extra frames to catch up
+	}
+
 	const render::GlApi& g = render::gl();
 	g.glViewport(0, 0, w, h);
 	g.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -412,6 +532,23 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplSDL3_NewFrame();
 	ImGui::NewFrame();
+	if (app->sim) {
+		// Selection brackets and the drag box, drawn in window units.
+		const float inv = 1.0f / SDL_GetWindowPixelDensity(app->window);
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		for (sim::ObjectId id : app->selection.ids()) {
+			const sim::Object* o = app->sim->find(id);
+			if (!o)
+				continue;
+			const float wx = float(o->location.x - o->location.y) * 30.0f / 256.0f;
+			const float wy = float(o->location.x + o->location.y) * 15.0f / 256.0f - float(world::height_to_pixels(o->location.z));
+			const float sx = (wx - app->view.scroll_x) * app->view.zoom * inv, sy = (wy - app->view.scroll_y) * app->view.zoom * inv;
+			const float hw = 22.0f * app->view.zoom * inv, hh = 22.0f * app->view.zoom * inv;
+			dl->AddRect(ImVec2(sx - hw, sy - hh - 6.0f * app->view.zoom * inv), ImVec2(sx + hw, sy + hh - 6.0f * app->view.zoom * inv), IM_COL32(60, 255, 60, 255), 0.0f, 0, 1.5f);
+		}
+		if (app->selecting)
+			dl->AddRect(ImVec2(app->select_x0 * inv, app->select_y0 * inv), ImVec2(app->mouse_x * inv, app->mouse_y * inv), IM_COL32(255, 255, 255, 220));
+	}
 	if (app->show_ui) {
 		ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(ImVec2(420, 560), ImGuiCond_FirstUseEver);
@@ -451,6 +588,12 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 		ImGui::Checkbox("Lighting", &app->renderer->use_lighting);
 		if (ImGui::Checkbox("Shroud", &app->show_shroud))
 			update_shroud(*app);
+		if (app->sim && app->loop) {
+			ImGui::Separator();
+			ImGui::Text("Simulation: frame %u%s, %zu selected, local house %s", app->loop->frame(), app->paused ? " (paused)" : "",
+			            app->selection.ids().size(), app->sim->house(app->local_house).name.c_str());
+			ImGui::TextUnformatted("Left: select (drag: box)   Right: move   X: stop   Space: pause   Middle: pan");
+		}
 		ImGui::End();
 	}
 	ImGui::Render();
