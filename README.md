@@ -51,10 +51,10 @@ After the first import, the copied folder can be deleted and the app works offli
 ### Building the app
 | Phase | What it delivers | Status |
 |---|---|---|
-| 0 | Project setup | todo |
-| 1 | Reading the game files | todo |
-| 2 | Map display, RA2 and YR selection | todo |
-| 3 | Units and buildings on the map | todo |
+| 0 | Project setup | done |
+| 1 | Reading the game files | done |
+| 2 | Map display, RA2 and YR selection | done |
+| 3 | Units and buildings on the map | in progress |
 | 4 | Movement and the game loop | todo |
 | 5 | Combat | todo |
 | 6 | Economy and building | todo |
@@ -65,7 +65,7 @@ After the first import, the copied folder can be deleted and the app works offli
 | 11 | Multiplayer | todo |
 | 12 | Release | todo |
 
-**Overall: 0 of 13 phases done (0%).**
+**Overall: 3 of 13 phases done (23%).**
 
 ## Legal
 - This is an unofficial, fan-made project. It is not affiliated with or endorsed by Electronic Arts.

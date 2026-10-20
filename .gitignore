@@ -9,6 +9,8 @@ __pycache__/
 local.properties
 .gradle/
 build/
+.cxx/
+.kotlin/
 *.apk
 *.aab
 
