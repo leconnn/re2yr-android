@@ -6,11 +6,10 @@
 // that give orders (MEGAMISSION: move, stop, guard), and updates movement every frame through the
 // game loop's LogicObjects step.
 //
-// PROVISIONAL parts (marked in the code, to be replaced by the decoded originals in block 4B-fix):
-//  - CanEnterCell (FootClass vslot 0x1AC): terrain speed, buildings, trees and cliffs only.
-//  - FacingClass turning: a fixed turn rate of ROT << 8 per frame.
-//  - Drive StartOfMove: straight tracks only; a turn of more than 45 degrees is a turn in place first.
-//    The curved turn tracks need the decoded track entry rules.
+// Movement follows the decoded originals (U section 10, 4B-fix): FacingClass turning, the height rule
+// (vslot 0x1B0), the core of CanEnterCell for units and infantry, the infantry free-spot search, and
+// Drive StartOfMove with curved turn tracks. Branches that depend on systems not written yet (gates,
+// cloaking, mind control, bridges, tubes, occupiable buildings) are listed in FUTURE_THINGS.
 
 #include "core/random.h"
 #include "sim/loop/game_loop.h"
@@ -86,8 +85,15 @@ public:
 	// ---- pathfinding ----
 	// FootClass::UpdatePathfinding for a unit going to 'goal': fills its path. False if there is none.
 	bool find_path(Object& o, Cell goal);
-	// FootClass::CanEnterCell for the unit (PROVISIONAL).
+	// FootClass::CanEnterCell (vslot 0x1AC) for a unit or infantry moving into 'to' in direction 'dir'.
 	ra::sim::path::Move can_enter(const Object& o, Cell to, int dir, Cell from) const;
+	// The height rule between neighbouring cells (vslot 0x1B0): false means the move is impossible.
+	bool level_rule(Cell from, Cell to, int unit_level) const;
+	// CellClass free spot search (0x481180): the point of a free infantry spot in 'cell', starting from
+	// the spot that 'near' falls in. Draws from the scenario RNG when it starts from the centre spot.
+	bool find_free_spot(Cell cell, Coord near, Coord& out);
+	static int spot_of(Coord c); // 0x4810A0
+	bool allied(int house_a, int house_b) const { return house_a == house_b; }
 
 	const ra::world::World& world() const { return *world_; }
 	uint32_t frame() const { return frame_; }
@@ -102,6 +108,7 @@ private:
 	size_t cell_index(Cell c) const { return size_t(c.y) * ra::world::MapGrid::kSize + size_t(c.x); }
 	void occupy(const Object& o, Cell c);
 	void vacate(const Object& o, Cell c);
+	bool cell_has_vehicle(Cell c, ObjectId except) const;
 	bool blocked_terrain(Cell c) const { return blocked_[cell_index(c)] != 0; }
 
 	// Movement.
@@ -110,7 +117,9 @@ private:
 	void walk_process(Object& o);
 	void start_of_move(Object& o);
 	void while_moving(Object& o);
-	bool turn_towards(Object& o, Facing desired);
+	void sync_facing(Object& o) { o.body.raw = o.primary_facing.current(frame_); o.turret.raw = o.secondary_facing.current(frame_); }
+	double speed_target(const Object& o, Cell head) const;
+	bool begin_track(Object& o, int track, Cell head, int steps_used);
 	void enter_cell(Object& o, Cell c);
 
 	const ra::world::World* world_;
@@ -119,7 +128,11 @@ private:
 	LandSpeeds land_speeds_;
 	std::vector<House> houses_;
 	std::vector<Object> objects_;
-	std::vector<std::array<ObjectId, 5>> occupancy_;
+	struct CellOccupancy {
+		ObjectId vehicle = 0;               // a unit standing in or moving into the cell
+		std::array<ObjectId, 5> spot {};    // infantry spots 0 (centre), 2, 3, 4 (1 is never used)
+	};
+	std::vector<CellOccupancy> occupancy_;
 	std::vector<uint8_t> blocked_; // cells that buildings and trees block
 	ra::world::ShroudMap shroud_;
 	int local_house_ = 0;

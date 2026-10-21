@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 
 namespace ra::sim {
 
@@ -39,6 +40,61 @@ struct Facing {
 	uint32_t crc_byte() const { return ((uint32_t(raw) >> 7) + 1) >> 1; }
 };
 
+// FacingClass (0x4C91C0...): a facing that turns toward a desired one at a fixed rate.
+// The turn takes |desired - start| / ROT frames and the facing in between is interpolated linearly.
+struct FacingControl {
+	uint16_t desired = 0;
+	uint16_t start = 0;
+	int32_t timer_start = 0; // CDTimer: the frame it started
+	int32_t time_left = 0;   // and its length
+	int16_t rot = 0;         // binary-angle units per frame: min(ROT, 127) << 8
+
+	void set_rot(int type_rot) { rot = static_cast<int16_t>(uint16_t(uint8_t(type_rot > 126 ? 127 : type_rot)) << 8); }
+	int remaining(uint32_t frame) const
+	{
+		const int elapsed = static_cast<int>(frame) - timer_start;
+		return elapsed >= time_left ? 0 : time_left - elapsed;
+	}
+	// The current facing (0x4C93D0).
+	uint16_t current(uint32_t frame) const
+	{
+		if (rot < 1)
+			return desired;
+		const int rem = remaining(frame);
+		if (rem == 0)
+			return desired;
+		const int16_t diff = static_cast<int16_t>(desired - start);
+		const int16_t steps = static_cast<int16_t>(std::abs(int(diff)) / rot);
+		if (steps < 1)
+			return desired;
+		return static_cast<uint16_t>(int16_t(desired) - int16_t(diff / steps) * int16_t(rem));
+	}
+	bool rotating(uint32_t frame) const { return rot > 0 && remaining(frame) > 0; }
+	// Turns toward a new facing (0x4C9220). False if it was already the target.
+	bool set_desired(uint16_t facing, uint32_t frame)
+	{
+		if (desired == facing)
+			return false;
+		start = current(frame);
+		desired = facing;
+		if (rot > 0) {
+			timer_start = static_cast<int32_t>(frame);
+			time_left = std::abs(int(int16_t(facing - start))) / rot;
+		}
+		return true;
+	}
+	// Jumps to a facing at once (0x4C9300). False if it was already there.
+	bool set_current(uint16_t facing, uint32_t frame)
+	{
+		const bool changed = current(frame) != facing;
+		if (changed)
+			desired = start = facing;
+		timer_start = static_cast<int32_t>(frame);
+		time_left = 0;
+		return changed;
+	}
+};
+
 inline constexpr int kMaxPath = 24;
 
 // The movement state of a unit or infantry (FootClass and the locomotor).
@@ -61,8 +117,7 @@ struct FootState {
 	double speed_percentage = 1.0; // SpeedPercentage (Foot+0x578)
 	double target_speed = 1.0;
 
-	Facing desired_facing {};      // where the body is turning to
-	bool rotating = false;
+	bool rotating = false;         // Drive IsRotating: waiting for a turn in place to finish
 
 	int path_delay = 0;            // frames until the next pathfinding attempt
 	Cell current_cell {};          // CurrentMapCoords: the cell the unit is registered in
@@ -76,8 +131,10 @@ struct Object {
 	int type_info = -1;            // index into the simulation's TypeInfo list
 	int house = 0;
 	Coord location {};             // leptons
-	Facing body {};
+	Facing body {};                // the body facing as of the last update (PrimaryFacing.current())
 	Facing turret {};
+	FacingControl primary_facing {};
+	FacingControl secondary_facing {};
 	int health = 0;                // strength points
 	int sub_cell = 0;              // infantry spot in the cell (0 centre, 2, 3, 4 others)
 	Mission mission = Mission::Guard;

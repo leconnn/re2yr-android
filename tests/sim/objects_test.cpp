@@ -408,3 +408,115 @@ TEST(Simulation, ReplaysOfTheSameRecordingGiveTheSameFrameCrcs)
 	EXPECT_GE(a.entries.size(), 150u);
 	EXPECT_EQ(p1, live); // playback reproduces the movement of the recorded game
 }
+
+TEST(Facing, TurnsAtRotAndInterpolatesLikeTheOriginal)
+{
+	FacingControl f;
+	f.set_rot(5); // 0x500 per frame
+	EXPECT_EQ(f.rot, 0x500);
+	EXPECT_TRUE(f.set_desired(0x4000, 100));
+	EXPECT_EQ(f.time_left, 0x4000 / 0x500); // 12 frames
+	EXPECT_TRUE(f.rotating(100));
+	// current = desired - (diff / steps) * remaining, with steps = |diff| / rot = 12 and diff / steps = 1365.
+	EXPECT_EQ(f.current(100), uint16_t(0x4000 - 1365 * 12)); // 4: the original never starts exactly at 0
+	EXPECT_EQ(f.current(106), uint16_t(0x4000 - 1365 * 6));
+	EXPECT_EQ(f.current(112), 0x4000);
+	EXPECT_FALSE(f.rotating(112));
+	EXPECT_FALSE(f.set_desired(0x4000, 120)); // already the target
+	// Turning the short way round through north.
+	EXPECT_TRUE(f.set_desired(0xC000, 120));
+	EXPECT_EQ(f.time_left, 0x8000 / 0x500);
+	EXPECT_EQ(f.current(121), uint16_t(0xC000 - int16_t(int16_t(0xC000 - 0x4000) / int16_t(0x8000 / 0x500)) * int16_t(0x8000 / 0x500 - 1)));
+	// ROT above 127 is capped; ROT 0 turns at once.
+	FacingControl g;
+	g.set_rot(500);
+	EXPECT_EQ(g.rot, 0x7F00);
+	FacingControl h;
+	h.set_rot(0);
+	h.set_desired(0x2000, 5);
+	EXPECT_EQ(h.current(5), 0x2000);
+}
+
+TEST(Infantry, SpotsOfPointsAndTheFreeSpotSearch)
+{
+	EXPECT_EQ(Simulation::spot_of({ 128, 128, 0 }), 0);
+	EXPECT_EQ(Simulation::spot_of({ 192, 64, 0 }), 2);
+	EXPECT_EQ(Simulation::spot_of({ 64, 192, 0 }), 3);
+	EXPECT_EQ(Simulation::spot_of({ 192, 192, 0 }), 4);
+	EXPECT_EQ(Simulation::spot_of({ 64, 64, 0 }), 0);  // the top-left quadrant counts as the centre
+	EXPECT_EQ(Simulation::spot_of({ 150, 140, 0 }), 0); // within 60 leptons of the centre
+
+	TestWorld w;
+	Coord out;
+	// Starting from a corner spot that is free: that spot.
+	ASSERT_TRUE(w.sim->find_free_spot({ 30, 30 }, { 30 * 256 + 200, 30 * 256 + 60, 0 }, out));
+	EXPECT_EQ(out.x, 30 * 256 + 192);
+	EXPECT_EQ(out.y, 30 * 256 + 64);
+	// Starting from the centre draws one value from the scenario RNG to pick the order.
+	ra::Random2 copy = w.rng;
+	ASSERT_TRUE(w.sim->find_free_spot({ 30, 30 }, cell_center({ 30, 30 }), out));
+	const int r = copy.ranged(0, 3);
+	EXPECT_EQ(w.rng.index1(), copy.index1());
+	const int first_of_rotation[4] = { 2, 2, 3, 4 }; // rotations {1,2,3,4}, {2,3,4,1}, {3,4,1,2}, {4,1,2,3}, spot 1 skipped
+	EXPECT_EQ(Simulation::spot_of(out), first_of_rotation[r]);
+	// A cell with a unit in it has no free spot.
+	w.tank(w.americans, 31, 31);
+	EXPECT_FALSE(w.sim->find_free_spot({ 31, 31 }, cell_center({ 31, 31 }), out));
+}
+
+TEST(CanEnterCell, TheHeightRule)
+{
+	TestWorld w;
+	auto at = [&](int x, int y) { return w.world.grid.mutable_at(x, y); };
+	at(31, 30)->level = 1;
+	at(32, 30)->level = 1;
+	at(33, 30)->level = 3;
+	EXPECT_TRUE(w.sim->level_rule({ 30, 30 }, { 30, 31 }, 0));  // same level
+	EXPECT_FALSE(w.sim->level_rule({ 30, 30 }, { 31, 30 }, 0)); // one up, no ramp
+	at(30, 30)->slope = 2;                                      // a ramp in the cell climbed from
+	EXPECT_TRUE(w.sim->level_rule({ 30, 30 }, { 31, 30 }, 0));
+	EXPECT_FALSE(w.sim->level_rule({ 32, 30 }, { 33, 30 }, 1)); // two up: a cliff
+	EXPECT_FALSE(w.sim->level_rule({ 31, 30 }, { 30, 31 }, 1) && at(30, 31)->slope == 0); // one down needs a ramp where it lands
+	at(30, 31)->slope = 4;
+	EXPECT_TRUE(w.sim->level_rule({ 31, 30 }, { 30, 31 }, 1));
+}
+
+TEST(Orders, TurnsOfFortyFiveDegreesUseTheCurvedTrack)
+{
+	TestWorld w;
+	const ObjectId tank = w.tank(w.americans, 30, 30, 0); // north
+	GameLoop loop(*w.sim, w.rng);
+	w.sim->attach(loop);
+	loop.issue(Simulation::move_event(w.americans, tank, { 32, 27 })); // north, then north-east twice
+	const Object& o = *w.sim->find(tank);
+	bool used_curve = false;
+	bool turned_after_moving = false;
+	const Coord start = o.location;
+	run_until(loop, 900, [&] {
+		if (o.foot.track_number >= 0 && (ra::sim::drive_tracks::turn_track(o.foot.track_number).flag & 8))
+			used_curve = true;
+		// A turn in place may happen before the first step (to face it), never once the tank is driving:
+		// the 45-degree turns are made by the curved tracks.
+		turned_after_moving |= o.foot.rotating && o.location != start;
+		return o.cell() == Cell { 32, 27 } && !o.foot.has_destination;
+	});
+	EXPECT_EQ(o.cell(), (Cell { 32, 27 }));
+	EXPECT_TRUE(used_curve);
+	EXPECT_FALSE(turned_after_moving);
+}
+
+TEST(Orders, DamagedUnitsDriveAtThreeQuartersOfTheirSpeed)
+{
+	TestWorld w;
+	const ObjectId healthy = w.tank(w.americans, 30, 40, 0);
+	const ObjectId damaged = w.sim->spawn(ra::rules::TypeKind::Vehicle, w.type(ra::rules::TypeKind::Vehicle, "HTNK"), w.americans, { 34, 40 }, Facing {}, 100);
+	GameLoop loop(*w.sim, w.rng);
+	w.sim->attach(loop);
+	loop.issue(Simulation::move_event(w.americans, healthy, { 30, 30 }));
+	loop.issue(Simulation::move_event(w.americans, damaged, { 34, 30 }));
+	for (int i = 0; i < 80; ++i)
+		ASSERT_TRUE(loop.run_frame());
+	EXPECT_DOUBLE_EQ(w.sim->find(damaged)->foot.target_speed, 0.75);
+	EXPECT_DOUBLE_EQ(w.sim->find(healthy)->foot.target_speed, 1.0);
+	EXPECT_LT(40 * 256 - w.sim->find(damaged)->location.y, 40 * 256 - w.sim->find(healthy)->location.y);
+}
