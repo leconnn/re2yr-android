@@ -22,6 +22,9 @@ std::vector<OverlayInfo> read_overlays(const ra::rules::RulesDb& rules)
 		info.crate = o.get_bool("Crate");
 		info.veins = o.get_bool("IsVeins");
 		info.no_use_tile_land_type = o.get_bool("NoUseTileLandType");
+		info.crushable = o.get_bool("Crushable");
+		info.rubble = o.get_bool("IsRubble");
+		info.rock = o.get_bool("IsARock");
 		info.draw_flat = o.get_bool("DrawFlat");
 		// The land type of the overlay itself: an explicit Land= key, or Wall for walls.
 		const std::string land = o.get_string("Land");

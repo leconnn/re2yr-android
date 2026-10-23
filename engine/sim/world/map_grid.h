@@ -40,8 +40,9 @@ public:
 	int height() const { return height_; }
 	// Whether a cell is inside the map's diamond.
 	bool in_map(int x, int y) const;
-	// Whether a cell is inside the playable (local) area.
-	bool in_local(int x, int y) const;
+	// Whether a cell is inside the playable (local) area (MapClass::IsWithinUsableArea, 0x578460). With
+	// 'by_level' the bottom edge moves down by the cell's height (one more for a slope near the top edge).
+	bool in_local(int x, int y, bool by_level = false) const;
 
 	// The height of the ground at a lepton position, for the cell it lies in.
 	int ground_height(const ra::Coord& c) const;

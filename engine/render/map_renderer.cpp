@@ -519,7 +519,7 @@ void MapRenderer::draw(const View& requested_view)
 		if (sim_) {
 			draw_objs.reserve(sim_->objects().size());
 			for (const auto& o : sim_->objects()) {
-				if (!o.alive || o.in_limbo)
+				if (!o.alive || o.in_limbo || o.what == ra::sim::What::Bullet)
 					continue;
 				const auto& t = sim_->info(o);
 				draw_objs.push_back({ o.kind, o.type, &sim_->house(o.house).name, t.strength > 0 ? std::min(256, o.health * 256 / t.strength) : 256,

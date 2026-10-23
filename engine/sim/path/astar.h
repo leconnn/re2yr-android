@@ -11,8 +11,10 @@
 //  - the open list is the original's binary heap, and the last neighbour created while expanding a
 //    node is held back and compared with the heap top instead of being pushed (ties go to the heap);
 //  - a goal cell that can't be entered ends the search at the cell next to it.
-// Not here yet: the hierarchical corridor (pass a corridor callback to restrict the search), the bridge
-// direction costs (FindBridgeDir) and the two path post-processing passes (0x42B210, 0x42B7F0).
+// After a successful search the path goes through the original's two clean-up passes (U section 11.6):
+// zig-zag straightening (0x42B210) and the loop shortcut over the first 20 steps (0x42B7F0).
+// Not here yet: the hierarchical corridor (pass a corridor callback to restrict the search) and the
+// bridge direction costs (FindBridgeDir).
 
 #include <cstdint>
 #include <functional>
@@ -51,6 +53,10 @@ struct SearchMap {
 	virtual float moving_block_cost(Cell to, bool bridge_level) const { (void)to; (void)bridge_level; return 1.0f; }
 	// The hierarchical corridor: may the search expand into this cell? Default: everywhere.
 	virtual bool in_corridor(Cell c) const { (void)c; return true; }
+	// The level-0 part of a cell (Zones), for following the hierarchical route.
+	virtual int part(Cell c) const { (void)c; return 0; }
+	// The owner's threat at a cell (HouseClass threat map, 0x56BCD0), read by the clean-up passes.
+	virtual int threat(Cell c) const { (void)c; return 0; }
 };
 
 struct Query {
@@ -60,6 +66,9 @@ struct Query {
 	float path_cost_factor = 1.0f;       // AStarClass +0x4
 	bool train = false;                  // IsTrain: anything below Move::No costs as Ok
 	bool find_mode_2 = false;            // FindMode 2 (MovingBlock costs 1000), passed to the map
+	double threat_factor = 0.0;          // the unit's threat avoidance (Foot +0x530, 0x4DC760)
+	bool clean_up = true;                // run the two clean-up passes on a found path
+	const std::vector<int>* route = nullptr; // the hierarchical search's level-0 route, if it ran
 };
 
 struct Result {
@@ -69,8 +78,16 @@ struct Result {
 	std::vector<int> levels;     // the level of the cell reached by each step
 	float cost = 0.0f;           // g of the last node
 	int expanded = 0;            // nodes expanded
+	// The furthest cell along the hierarchical route the search opened (AStarClass +0x70): the start,
+	// or the first cell opened in each next part of the route. The retry after a failure works there.
+	Cell progress;
 };
 
 Result find_path(const SearchMap& map, const Query& query);
+
+// The two clean-up passes, run by find_path on every path it finds. The second removes the steps it
+// shortcuts, so 'directions' can get shorter.
+void straighten_zigzags(const SearchMap& map, const Query& query, Cell start, std::vector<int>& directions, const std::vector<int>& levels);
+void shortcut_loops(const SearchMap& map, const Query& query, Cell start, std::vector<int>& directions, const std::vector<int>& levels);
 
 } // namespace ra::sim::path

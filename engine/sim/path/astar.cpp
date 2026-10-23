@@ -163,6 +163,8 @@ Result Search::run(const SearchMap& map, const Query& q)
 	if (q.start == q.goal && q.start_level == q.goal_level)
 		return result; // already there: no path
 
+	result.progress = q.start;
+	size_t route_index = 0;
 	int cur = create(map, q, -1, q.start, 0.0f, q.start_level);
 	int cur_level = q.start_level;
 	{
@@ -224,6 +226,10 @@ Result Search::run(const SearchMap& map, const Query& q)
 					held = r;
 					marks.stamp[idx] = id_;
 					marks.g[idx] = records_[size_t(r)].g;
+					if (q.route && route_index + 1 < q.route->size() && map.part(nc) == (*q.route)[route_index + 1]) {
+						++route_index;
+						result.progress = nc;
+					}
 				}
 			} else if (nc == q.goal && !q.train && std::abs(cur_level - q.goal_level) < 2) {
 				next_to_goal = true; // the goal is blocked: the path ends next to it
@@ -264,6 +270,10 @@ Result Search::run(const SearchMap& map, const Query& q)
 		result.directions.push_back(std::abs(dx) < 2 && std::abs(dy) < 2 ? direction_of(dx, dy) : 8);
 		result.levels.push_back(from.level);
 	}
+	if (q.clean_up) {
+		straighten_zigzags(map, q, result.start, result.directions, result.levels);
+		shortcut_loops(map, q, result.start, result.directions, result.levels);
+	}
 	return result;
 }
 
@@ -274,6 +284,298 @@ Cell step(Cell c, int dir)
 	if (dir < 0 || dir > 7)
 		return c;
 	return { c.x + kDx[dir], c.y + kDy[dir] };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The clean-up passes (U section 11.6)
+
+namespace {
+
+// One step along a path: a tube jump goes to the tube's exit, or to cell (0, 0) when there is none
+// (0x42D490).
+Cell advance(const SearchMap& map, Cell c, int dir)
+{
+	if (dir != 8)
+		return step(c, dir & 7);
+	Cell exit;
+	if (map.tube_exit(c, exit))
+		return exit;
+	return { 0, 0 };
+}
+
+// CanEnterCell with the "check only" arguments. There is no from cell, so the original takes the cell
+// behind 'to' (0x4D9C60).
+Move check_enter(const SearchMap& map, Cell to, int dir, int level)
+{
+	if (!map.exists(to))
+		return Move::No;
+	return map.can_enter(to, dir, level, step(to, (dir + 4) & 7));
+}
+
+// The level carried along a straight line: the cell's level, or its deck level when the line is on
+// the deck.
+int line_level(const SearchMap& map, Cell c, int level)
+{
+	if (!map.exists(c))
+		return 0;
+	const int lv = map.level(c);
+	if (level - lv == 4 && map.bridge(c))
+		return lv + 4;
+	return lv;
+}
+
+int threat_at(const SearchMap& map, Cell c) { return map.exists(c) ? map.threat(c) : 0; }
+
+// 0x42B420: a run of 'a' steps in direction d1 followed by 'b' steps in d2, 90 degrees apart, starting
+// at 'cell'. Replaces the last k steps of the first run and the first k of the second with 2k steps in
+// the direction between them, for the largest k (up to min(a, b)) whose straight line is free. Returns
+// how many steps it moved past and sets 'cell' to the cell there.
+int straighten(const SearchMap& map, const Query& q, std::vector<int>& d, const std::vector<int>& lv, int s, int a, int b, Cell& cell)
+{
+	const int d1 = d[size_t(s)], d2 = d[size_t(s + a)];
+	int mid = (d1 + d2) >> 1;
+	if (mid + 1 != d2 && mid + 1 != d1)
+		mid = 0;
+	if (d1 == 8 || d2 == 8) {
+		for (int j = 0; j < a + b; ++j)
+			cell = advance(map, cell, d[size_t(s + j)]);
+		return a + b;
+	}
+	Cell c = cell;
+	int k = b;
+	if (a < b) {
+		k = a;
+	} else if (b < a) {
+		for (int j = 0; j < a - b; ++j)
+			c = advance(map, c, d[size_t(s + j)]);
+	}
+	for (; k > 0; --k) {
+		Cell t = step(c, mid & 7);
+		int level = lv[size_t(s + a - k)];
+		bool blocked = false;
+		for (int left = 2 * k; left > 0 && !blocked; --left) {
+			// The threat is read at the line's first cell, not at the cell checked.
+			blocked = check_enter(map, t, mid, level) != Move::Ok || map.slow(t)
+				|| ra::fpu::mul(double(threat_at(map, c)), q.threat_factor) >= 1.0;
+			t = step(t, mid & 7);
+			// The level for the next check is that cell's own, so a cliff inside the line goes unseen.
+			level = line_level(map, t, level);
+		}
+		if (!blocked) {
+			for (int j = a - k; j < a + k; ++j)
+				d[size_t(s + j)] = mid;
+			for (int j = 0; j < a - k; ++j)
+				cell = advance(map, cell, d[size_t(s + j)]);
+			return a - k;
+		}
+		c = step(c, d1 & 7);
+	}
+	for (int j = 0; j < a; ++j)
+		cell = advance(map, cell, d[size_t(s + j)]);
+	return a;
+}
+
+// 0x42BCA0: walk back from step 'last' to step 'first' (skipping removed steps). Returns the step just
+// after the first place, going back, where the distance from 'cell' grows again after having stalled,
+// and sets 'cell' to the cell before that step. Without such a place: 'first' and its cell.
+int loop_start(const std::vector<int>& d, int last, int first, Cell& cell)
+{
+	Cell c = cell;
+	int ox = 0, oy = 0, best = 0;
+	bool stalled = false;
+	for (int j = last; j >= first; --j) {
+		if (d[size_t(j)] == -2)
+			continue;
+		const int back = (d[size_t(j)] - 4) & 7;
+		ox += kDx[back];
+		oy += kDy[back];
+		c = step(c, back);
+		const int dist = std::max(std::abs(ox), std::abs(oy));
+		if (best < dist) {
+			best = dist;
+			if (stalled) {
+				cell = step(c, (back - 4) & 7);
+				return j + 1;
+			}
+		} else {
+			stalled = true;
+		}
+	}
+	cell = c;
+	return first;
+}
+
+// 0x42BE20: replace 'count' steps from 'cell' to cell + (dx, dy) with a diagonal run and a straight
+// run (diagonal first; then the other order). The steps left over become -2.
+bool rewrite_leg(const SearchMap& map, const Query& q, std::vector<int>& d, int s, int count, Cell cell, int dx, int dy, int level0, bool lenient)
+{
+	int diag = dx < 0 ? (dy >= 0 ? 5 : 7) : (dy >= 0 ? 3 : 1);
+	int straight = dx <= dy ? (dx + dy < 1 ? 6 : 4) : (dx + dy < 1 ? 0 : 2);
+	int n1 = std::min(std::abs(dx), std::abs(dy));
+	int n2 = std::max(std::abs(dx), std::abs(dy)) - n1;
+	const bool threats = q.threat_factor > 1e-5;
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		if (n1 != 0) {
+			int hot = 0; // cells on the route with threat * factor >= 0.01
+			int level = level0;
+			Cell c = cell;
+			bool blocked = false;
+			auto check = [&](int dir) {
+				c = step(c, dir);
+				if (threats && ra::fpu::mul(double(threat_at(map, c)), q.threat_factor) >= 0.01)
+					++hot;
+				blocked = !(check_enter(map, c, dir, level) == Move::Ok && !map.slow(c) && hot < 4 && (lenient || hot < 1));
+				level = line_level(map, c, level);
+			};
+			for (int j = 0; j < n1 && !blocked; ++j)
+				check(diag);
+			for (int j = 0; j < n2 && !blocked; ++j)
+				check(straight);
+			if (!blocked) {
+				int i = s;
+				for (int j = 0; j < n1; ++j)
+					d[size_t(i++)] = diag;
+				for (int j = 0; j < n2; ++j)
+					d[size_t(i++)] = straight;
+				for (; i < s + count; ++i)
+					d[size_t(i)] = -2;
+				return true;
+			}
+		}
+		std::swap(diag, straight);
+		std::swap(n1, n2);
+	}
+	return false;
+}
+
+} // namespace
+
+void straighten_zigzags(const SearchMap& map, const Query& q, Cell start, std::vector<int>& d, const std::vector<int>& lv)
+{
+	// 0x42B210. A candidate is a run of diagonal steps followed by a run at 90 degrees to it (a straight
+	// run resets the scan), except right after a replacement, whose direction is kept even when straight.
+	const int n = static_cast<int>(d.size());
+	Cell cur = start, run_cell = start;
+	int prev = -1, run_len = 0, run_start = 0;
+	int second = -1, second_start = 0, second_len = 0;
+	bool zig = false;
+	while (run_start + run_len < n) {
+		if (second_start + second_len >= n)
+			break;
+		if (zig) {
+			if (d[size_t(second_start + second_len)] == second) {
+				++second_len;
+			} else {
+				run_start += straighten(map, q, d, lv, run_start, run_len, second_len, run_cell);
+				run_len = 1;
+				zig = false;
+				cur = step(run_cell, d[size_t(run_start)] & 7);
+				prev = d[size_t(run_start)];
+			}
+			continue;
+		}
+		const int i = run_start + run_len;
+		const int dir = d[size_t(i)];
+		const int turn = (dir - prev) & 7;
+		if (dir == prev) {
+			++run_len;
+		} else if ((turn == 2 || turn == 6) && prev != -1 && prev != 8 && dir != 8) {
+			zig = true;
+			second_len = 1;
+			second_start = i;
+			second = dir;
+		} else {
+			run_len = 1;
+			prev = (dir & 1) ? dir : -1;
+			run_cell = cur;
+			run_start = i;
+		}
+		cur = advance(map, cur, dir);
+	}
+	if (zig)
+		straighten(map, q, d, lv, run_start, run_len, second_len, run_cell);
+}
+
+void shortcut_loops(const SearchMap& map, const Query& q, Cell start, std::vector<int>& d, const std::vector<int>& lv)
+{
+	// 0x42B7F0. Over the first 20 steps the path is split into stretches that are monotonic on both
+	// axes (A: the offset within the stretch). A second offset B should grow in Chebyshev length with
+	// every step; when it doesn't, the steps from the place loop_start finds are rewritten as the
+	// shortest route. When a new stretch starts, B becomes (stretch start - here), as in the original.
+	const int n = static_cast<int>(d.size());
+	Cell cur = start;
+	int ax = 0, ay = 0, prev_ax = 0, prev_ay = 0; // A, and its last absolute values
+	int bx = 0, by = 0, b_max = 0;                 // B, and the largest Chebyshev length it reached
+	Cell ref { 0, 0 };                             // where the current stretch started; (0, 0) = none yet
+	int stretch = 0, prev_stretch = 0;             // the steps where the last two stretches started
+	int i = 0;
+	while (i < n) {
+		if (i > 19)
+			break;
+		const int dir = d[size_t(i)];
+		if (dir == 8) {
+			// A tube jump: the original moves the cell one step north here, then starts over.
+			cur = step(cur, 0);
+			++i;
+			ax = ay = bx = by = 0;
+			prev_ax = prev_ay = 0;
+			b_max = 0;
+			ref = { 0, 0 };
+			stretch = prev_stretch = i;
+			continue;
+		}
+		if (dir == -2) {
+			++i;
+			continue;
+		}
+		const int nax = ax + kDx[dir & 7], nay = ay + kDy[dir & 7];
+		const int nbx = bx + kDx[dir & 7], nby = by + kDy[dir & 7];
+		if (std::abs(nax) < prev_ax || std::abs(nay) < prev_ay) {
+			// A turns back on an axis: a new stretch starts here, and this step is looked at again.
+			if (ref.x != 0 || ref.y != 0) {
+				prev_stretch = stretch;
+				bx = int16_t(ref.x - cur.x);
+				by = int16_t(ref.y - cur.y);
+				b_max = std::max(std::abs(bx), std::abs(by));
+			}
+			prev_ax = prev_ay = 0;
+			ax = ay = 0;
+			ref = cur;
+			stretch = i;
+			continue;
+		}
+		ax = nax;
+		ay = nay;
+		prev_ax = std::abs(nax);
+		prev_ay = std::abs(nay);
+		cur = step(cur, dir & 7);
+		const int dist = std::max(std::abs(nbx), std::abs(nby));
+		if (b_max < dist) {
+			b_max = dist;
+		} else {
+			Cell from = cur;
+			const int first = loop_start(d, i, prev_stretch, from);
+			rewrite_leg(map, q, d, first, i - first + 1, from, cur.x - from.x, cur.y - from.y, lv[size_t(first)], false);
+		}
+		bx = nbx;
+		by = nby;
+		++i;
+	}
+	if (ref.x != 0 || ref.y != 0) {
+		const int dist = std::max(std::abs(int(int16_t(cur.x - ref.x))), std::abs(int(int16_t(cur.y - ref.y))));
+		if (i - stretch - 1 > dist) {
+			Cell from = cur;
+			const int first = loop_start(d, i - 1, stretch, from);
+			rewrite_leg(map, q, d, first, (i - 1) - first + 1, from, cur.x - from.x, cur.y - from.y, lv[size_t(first)], true);
+		}
+	}
+	// Drop the removed steps.
+	std::vector<int> kept;
+	kept.reserve(d.size());
+	for (int j = 0; j < n && d[size_t(j)] != -1; ++j)
+		if (d[size_t(j)] != -2)
+			kept.push_back(d[size_t(j)]);
+	d = std::move(kept);
 }
 
 Result find_path(const SearchMap& map, const Query& query)

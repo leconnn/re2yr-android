@@ -15,12 +15,14 @@
 #include "formats/tmp.h"
 #include "formats/voxel.h"
 #include "rules/rules_db.h"
+#include "sim/objects/simulation.h"
 #include "sim/world/world.h"
 #include "vfs/vfs.h"
 #include "voxel/voxel_renderer.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -490,6 +492,55 @@ TEST(Install, EveryMapLoadsIntoAWorldWithResolvedTiles)
 	EXPECT_EQ(no_tile, 0u); // 0xFFFF and out-of-range tile numbers become the clear tile
 	EXPECT_EQ(bad_overlay, 0u);
 	EXPECT_LT(empty_slot * 1000, cells); // a stale tile number here and there, never a pattern
+}
+
+// Every map's zones build (the fills recurse, so this also checks the stack holds), every usable land
+// cell gets a region, and land cells fall into a handful of tank zones per map.
+TEST(Install, EveryMapBuildsItsZones)
+{
+	REQUIRE_INSTALL();
+	Install& in = install();
+	rules::RulesDb rules;
+	std::string error;
+	ASSERT_TRUE(rules.load(in.vfs, vfs::GameKind::YurisRevenge, &error)) << error;
+	const auto maps = all_maps(in);
+	size_t built = 0, land = 0, land_without_region = 0, most_zones = 0, most_parts = 0;
+	std::string most_zones_map;
+	for (const MapSource& m : maps) {
+		formats::MapData data;
+		if (!formats::load_map(m.bytes, data, &error))
+			continue;
+		world::World w;
+		if (!world::World::load(in.vfs, in.base_mounts, rules, std::move(data), w, &error))
+			continue;
+		Random2 rng(1);
+		const sim::Simulation s(w, rng);
+		const sim::path::Zones& z = s.zones();
+		++built;
+		std::vector<int> zones;
+		for (int y = 0; y < world::MapGrid::kSize; ++y)
+			for (int x = 0; x < world::MapGrid::kSize; ++x) {
+				if (!w.grid.at(x, y).exists || s.passability(x, y) != 0)
+					continue;
+				++land;
+				if (z.region({ x, y }) == 0)
+					++land_without_region;
+				const int zone = z.movement_zone({ x, y }, 0);
+				if (std::find(zones.begin(), zones.end(), zone) == zones.end())
+					zones.push_back(zone);
+			}
+		if (zones.size() > most_zones) {
+			most_zones = zones.size();
+			most_zones_map = m.name;
+		}
+		most_parts = std::max(most_parts, z.nodes(0).size());
+	}
+	in.vfs.unmount_from(in.base_mounts);
+	std::cout << "Zones built for " << built << " maps; " << land << " land cells; most tank zones on one map " << most_zones << " (" << most_zones_map
+	          << "), most level-0 parts " << most_parts << "\n";
+	EXPECT_GT(built, 400u);
+	EXPECT_EQ(land_without_region, 0u);
+	EXPECT_LT(most_parts, 32768u); // part ids are 16-bit signed in the original
 }
 
 // The Rhino tank body at four facings: sprite sizes and positions worked out from the decoded

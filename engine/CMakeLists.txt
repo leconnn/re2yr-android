@@ -132,12 +132,21 @@ add_library(ra_sim STATIC
 	sim/objects/object.h
 	sim/objects/selection.cpp
 	sim/objects/selection.h
+	sim/objects/combat.cpp
+	sim/objects/combat_data.cpp
+	sim/objects/combat_data.h
+	sim/objects/economy.cpp
+	sim/objects/harvest.cpp
+	sim/objects/firing.cpp
+	sim/objects/locomotors.cpp
 	sim/objects/simulation.cpp
 	sim/objects/simulation.h
 	sim/objects/type_info.cpp
 	sim/objects/type_info.h
 	sim/path/astar.cpp
+	sim/path/zones.cpp
 	sim/path/astar.h
+	sim/path/zones.h
 )
 target_link_libraries(ra_sim PUBLIC ra_core ra_rules ra_world)
 ra_set_target_options(ra_sim)

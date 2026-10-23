@@ -25,6 +25,9 @@ struct OverlayInfo {
 	bool crate = false;
 	bool veins = false;
 	bool no_use_tile_land_type = false;
+	bool crushable = false;        // Crushable= (crushable walls: passability class 1)
+	bool rubble = false;           // IsRubble=
+	bool rock = false;             // IsARock=
 	bool draw_flat = true;
 };
 

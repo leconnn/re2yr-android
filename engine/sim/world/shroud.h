@@ -13,6 +13,11 @@
 
 namespace ra::world {
 
+// The hand-made circle table of MapClass (0xABD490) that area effects and sight both walk: the cells
+// within radius r are the first reveal_cell_count(r) entries, in this order.
+int reveal_cell_count(int radius);
+void reveal_cell_offset(int index, int& dx, int& dy);
+
 class ShroudMap {
 public:
 	ShroudMap() : revealed_(size_t(MapGrid::kSize) * MapGrid::kSize, 0) {}
@@ -23,6 +28,11 @@ public:
 	// Reveals the cells of the original's circle table for a radius (at most 10), each also passing
 	// |dx| <= r and ftol(sqrt(dx^2 + dy^2)) <= r (MapClass::RevealArea1 0x5673A0).
 	void reveal_area(int cx, int cy, int radius);
+
+	// RevealArea1 (0x5673A0) for an object at a lepton position: shifts the centre up the screen for
+	// height, reveals the circle table around it and, with RevealByHeight, skips cells hidden behind
+	// ground more than three levels above the viewer. 'radius' is the sight in cells.
+	void reveal_from(const MapGrid& grid, ra::Coord location, int radius, bool reveal_by_height);
 
 	bool revealed(int x, int y) const
 	{

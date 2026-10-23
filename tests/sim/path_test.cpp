@@ -115,3 +115,56 @@ TEST(Path, EqualCostRoutesFollowTheTieBreakOrder)
 	// decides: the SE neighbour is created first and pushed before the SW one is held.
 	EXPECT_EQ(a.directions, (std::vector<int> { 3, 5 }));
 }
+
+TEST(PathCleanUp, ADiagonalZigZagBecomesAStraightRun)
+{
+	Grid g;
+	const Query q = query({ 10, 10 }, { 14, 10 });
+	std::vector<int> d { 1, 1, 3, 3 };
+	const std::vector<int> lv(d.size(), 0);
+	straighten_zigzags(g, q, { 10, 10 }, d, lv);
+	EXPECT_EQ(d, (std::vector<int> { 2, 2, 2, 2 }));
+
+	// With the third cell of the straight line blocked, only the inner pair is replaced.
+	g.walls.insert({ 12, 10 });
+	d = { 1, 1, 3, 3 };
+	straighten_zigzags(g, q, { 10, 10 }, d, lv);
+	EXPECT_EQ(d, (std::vector<int> { 1, 2, 2, 3 }));
+
+	// Straight runs at 90 degrees are left alone (only diagonal runs start a candidate).
+	d = { 0, 0, 2, 2 };
+	straighten_zigzags(g, q, { 10, 10 }, d, lv);
+	EXPECT_EQ(d, (std::vector<int> { 0, 0, 2, 2 }));
+}
+
+TEST(PathCleanUp, ALoopInTheFirstStepsIsShortcut)
+{
+	Grid g;
+	const Query q = query({ 10, 10 }, { 11, 11 });
+	// East 3, south 1, west 2 ends one cell south-east of the start: the pass leaves one step.
+	std::vector<int> d { 2, 2, 2, 4, 6, 6 };
+	const std::vector<int> lv(d.size(), 0);
+	shortcut_loops(g, q, { 10, 10 }, d, lv);
+	EXPECT_EQ(d, (std::vector<int> { 3 }));
+
+	// A path whose every step moves one cell further from the start is kept.
+	d = { 2, 2, 3, 3 };
+	shortcut_loops(g, q, { 10, 10 }, d, std::vector<int>(d.size(), 0));
+	EXPECT_EQ(d, (std::vector<int> { 2, 2, 3, 3 }));
+	// A last step that doesn't (4 east, 3 south in 5 steps) is folded into a shorter route.
+	d = { 2, 2, 3, 3, 4 };
+	shortcut_loops(g, q, { 10, 10 }, d, std::vector<int>(d.size(), 0));
+	EXPECT_EQ(d, (std::vector<int> { 2, 3, 3, 3 }));
+}
+
+TEST(PathCleanUp, ShortcutsAreCheckedAgainstTheMap)
+{
+	// Diagonal moves into (11, 11) are refused, so the last shortcut of the loop above can't be taken.
+	struct NoDiagonalInto : Grid {
+		Move can_enter(Cell to, int dir, int, Cell) const override { return (dir & 1) && to == Cell { 11, 11 } ? Move::No : Move::Ok; }
+	} g;
+	const Query q = query({ 10, 10 }, { 11, 11 });
+	std::vector<int> d { 2, 2, 2, 4, 6, 6 };
+	shortcut_loops(g, q, { 10, 10 }, d, std::vector<int>(d.size(), 0));
+	EXPECT_EQ(d, (std::vector<int> { 2, 3, 6 }));
+}

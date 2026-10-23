@@ -28,10 +28,20 @@ bool MapGrid::in_map(int x, int y) const
 	return in_diamond(x, y, width_, height_);
 }
 
-bool MapGrid::in_local(int x, int y) const
+bool MapGrid::in_local(int x, int y, bool by_level) const
 {
-	// IsWithinUsableArea applies the same test to LocalSize.
-	return in_diamond(x, y, local_width_, local_height_);
+	// 0x578460, with W the map's width and LocalSize (lx, ly, lw, lh):
+	//   W + 2 ly + h < x + y <= W + 2 + 2 (ly + lh) + h,  x - y < 2 (lx + lw) - W,  y - x < W - 2 lx,
+	// where h is 0, or with 'by_level' the cell's level (+1 for a slope when x + y < W + 4 + 2 ly + level).
+	int h = 0;
+	if (by_level) {
+		const MapCell& c = at(x, y);
+		h = c.level;
+		if (c.slope != 0 && x + y < width_ + 4 + 2 * local_y_ + h)
+			++h;
+	}
+	return width_ + 2 * local_y_ + h < x + y && x + y <= width_ + 2 + 2 * (local_y_ + local_height_) + h
+		&& x - y < 2 * (local_x_ + local_width_) - width_ && y - x < width_ - 2 * local_x_;
 }
 
 int MapGrid::ground_height(const ra::Coord& c) const

@@ -7,12 +7,14 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 namespace ra::sim {
 
 namespace {
 
 using ra::sim::path::Move;
+using ra::rules::TypeKind;
 
 constexpr int kDx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
 constexpr int kDy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
@@ -59,28 +61,102 @@ int transform_facing(int facing, int flag)
 // The search map of one unit: the world as that unit's pathfinding sees it.
 class UnitSearchMap final : public ra::sim::path::SearchMap {
 public:
-	UnitSearchMap(const Simulation& sim, const Object& unit) : sim_(sim), unit_(unit) {}
+	UnitSearchMap(const Simulation& sim, const Object& unit, bool corridor) : sim_(sim), unit_(unit), corridor_(corridor) {}
 	bool exists(ra::sim::path::Cell c) const override { return sim_.world_->grid.at(c.x, c.y).exists; }
 	int level(ra::sim::path::Cell c) const override { return sim_.world_->grid.at(c.x, c.y).level; }
 	bool bridge(ra::sim::path::Cell) const override { return false; }
-	Move can_enter(ra::sim::path::Cell to, int dir, int, ra::sim::path::Cell from) const override
+	Move can_enter(ra::sim::path::Cell to, int dir, int level, ra::sim::path::Cell from) const override
 	{
-		return sim_.can_enter(unit_, Cell { int16_t(to.x), int16_t(to.y) }, dir, Cell { int16_t(from.x), int16_t(from.y) });
+		return sim_.can_enter(unit_, Cell { int16_t(to.x), int16_t(to.y) }, dir, Cell { int16_t(from.x), int16_t(from.y) }, level);
 	}
+	// A cell outside the corridor may still be opened when a foot unit stands next to it (0x429A90).
+	bool in_corridor(ra::sim::path::Cell c) const override
+	{
+		return !corridor_ || sim_.zones_.in_corridor(c) || sim_.near_feet_[sim_.cell_index({ int16_t(c.x), int16_t(c.y) })] != 0;
+	}
+	int part(ra::sim::path::Cell c) const override { return sim_.zones_.part(c, 0); }
 
 private:
 	const Simulation& sim_;
 	const Object& unit_;
+	bool corridor_;
 };
 
 Simulation::Simulation(const ra::world::World& world, ra::Random2& random)
-    : world_(&world), random_(&random), occupancy_(size_t(ra::world::MapGrid::kSize) * ra::world::MapGrid::kSize), blocked_(size_t(ra::world::MapGrid::kSize) * ra::world::MapGrid::kSize, 0)
+    : world_(&world), random_(&random), occupancy_(size_t(ra::world::MapGrid::kSize) * ra::world::MapGrid::kSize), blocked_(size_t(ra::world::MapGrid::kSize) * ra::world::MapGrid::kSize, 0),
+      building_at_(size_t(ra::world::MapGrid::kSize) * ra::world::MapGrid::kSize, 0), combat_(world.rules)
 {
 	land_speeds_.load(world.rules);
 	// Trees and rocks block the cell they stand in.
+	terrain_type_.assign(blocked_.size(), -1);
+	near_feet_.assign(blocked_.size(), 0);
+	overlay_.assign(blocked_.size(), -1);
+	overlay_data_.assign(blocked_.size(), 0);
+	for (int y = 0; y < ra::world::MapGrid::kSize; ++y)
+		for (int x = 0; x < ra::world::MapGrid::kSize; ++x) {
+			const ra::world::MapCell& mc = world.grid.at(x, y);
+			overlay_[size_t(y) * ra::world::MapGrid::kSize + size_t(x)] = mc.overlay;
+			overlay_data_[size_t(y) * ra::world::MapGrid::kSize + size_t(x)] = mc.overlay_data;
+		}
 	for (const auto& t : world.terrain_objects)
-		if (ra::world::MapGrid::in_grid(t.x, t.y))
+		if (ra::world::MapGrid::in_grid(t.x, t.y)) {
 			blocked_[cell_index({ int16_t(t.x), int16_t(t.y) })] = 1;
+			terrain_type_[cell_index({ int16_t(t.x), int16_t(t.y) })] = int16_t(t.type);
+		}
+	// The zones, built as the original does after loading the map (0x56C510, then 0x581F90 for levels 2, 1, 0).
+	zones_.build(world.grid.width(), world.grid.height(), [this](int x, int y) { return passability(x, y); },
+		[&world](int x, int y) { return int(world.grid.at(x, y).level); });
+}
+
+int Simulation::passability(int x, int y) const
+{
+	// 0x483C80. Buildings change the class only for laser fences and firestorm walls, which aren't here yet.
+	using ra::world::LandType;
+	const ra::world::MapGrid& grid = world_->grid;
+	const ra::world::MapCell& c = grid.at(x, y);
+	if (!c.exists || !grid.in_local(x, y, true))
+		return 7;
+	const auto wheel = [&](LandType land) { return ra::fpu::to_float(land_speeds_.multiplier(land, SpeedType::Wheel)); };
+	if (c.overlay >= 0 && static_cast<size_t>(c.overlay) < world_->overlays.size()) {
+		const ra::world::OverlayInfo& ov = world_->overlays[static_cast<size_t>(c.overlay)];
+		if (ov.crushable)
+			return 1;
+		if (ov.wall)
+			return 2;
+		if (wheel(ov.land) == 0.0f || ov.rock)
+			return 6;
+		if (ov.rubble)
+			return 0;
+	}
+	if (c.land == LandType::Water)
+		return 4;
+	if (c.land == LandType::Beach)
+		return 3;
+	if (double(wheel(c.land)) <= 0.01)
+		return 6;
+	// A tree: wholly blocking (class 2) unless its occupation bits for the theater leave spots free.
+	const int16_t tree = terrain_type_[cell_index({ int16_t(x), int16_t(y) })];
+	if (tree >= 0) {
+		const ra::rules::RuleObject t = world_->rules.object(ra::rules::TypeKind::Terrain, tree);
+		const bool snow = world_->theater && world_->theater->id == ra::rules::Theater::Snow;
+		const char* key = snow ? "SnowOccupationBits" : "TemperateOccupationBits";
+		const int bits = t.has(key) ? t.get_int(key) : 7;
+		return bits != 7 ? 5 : 2;
+	}
+	return 0;
+}
+
+bool Simulation::same_zone(const Object& o, Cell dest) const
+{
+	// 0x56D100 (own cell, destination): a unit outside the usable area (but on the map) may go anywhere;
+	// otherwise both cells must be in the same zone of the unit's movement zone. (The case for units
+	// allowed to leave the map, vslot 0x320, isn't here.)
+	const Cell own = o.cell();
+	const ra::world::MapGrid& grid = world_->grid;
+	if (!grid.in_local(own.x, own.y, true) && grid.in_map(own.x, own.y))
+		return true;
+	const int mz = info(o).movement_zone;
+	return zones_.movement_zone({ dest.x, dest.y }, mz) == zones_.movement_zone({ own.x, own.y }, mz);
 }
 
 int Simulation::house_index(const std::string& name)
@@ -89,7 +165,22 @@ int Simulation::house_index(const std::string& name)
 	for (size_t i = 0; i < houses_.size(); ++i)
 		if (ra::ini::to_lower(houses_[i].name) == key)
 			return static_cast<int>(i);
-	houses_.push_back({ name, true });
+	House h;
+	h.name = name;
+	h.human = true;
+	// The country's multipliers and the scenario tech level.
+	const ra::rules::RuleObject c = world_->rules.section(name, "HouseTypeClass");
+	static const char* const cost_keys[5] = { "CostInfantryMult", "CostUnitsMult", "CostAircraftMult", "CostBuildingsMult", "CostDefensesMult" };
+	static const char* const time_keys[5] = { "BuildTimeInfantryMult", "BuildTimeUnitsMult", "BuildTimeAircraftMult", "BuildTimeBuildingsMult", "BuildTimeDefensesMult" };
+	for (int i = 0; i < 5; ++i) {
+		h.econ.cost_mult[i] = c.has(cost_keys[i]) ? c.get_double(cost_keys[i]) : 1.0;
+		h.econ.build_time_mult[i] = c.has(time_keys[i]) ? c.get_double(time_keys[i]) : 1.0;
+	}
+	h.econ.income_mult = c.has("IncomeMult") ? c.get_double("IncomeMult") : 1.0;
+	h.econ.multiplay_passive = c.has("MultiplayPassive") && c.get_bool("MultiplayPassive");
+	const ra::rules::RuleObject g = world_->rules.section("General");
+	h.tech_level = g.has("TechLevel") ? g.get_int("TechLevel") : 10;
+	houses_.push_back(std::move(h));
 	return static_cast<int>(houses_.size()) - 1;
 }
 
@@ -114,10 +205,14 @@ ObjectId Simulation::spawn(ra::rules::TypeKind kind, int type, int house, Cell c
 	if (found < 0) {
 		types_.push_back(TypeInfo::read(world_->rules, kind, type));
 		found = static_cast<int>(types_.size()) - 1;
+		TypeInfo& added = types_.back();
+		added.weapon[0] = combat_.weapon(added.primary_name);
+		added.weapon[1] = combat_.weapon(added.secondary_name);
 	}
 	o.type_info = found;
 	const TypeInfo& t = types_[static_cast<size_t>(found)];
 	o.health = std::max(1, t.strength * std::clamp(health, 0, 256) / 256);
+	o.ammo = t.ammo;
 	// Both facings turn at the type's ROT (TechnoType +0x71C).
 	o.primary_facing.set_rot(t.rot);
 	o.secondary_facing.set_rot(t.rot);
@@ -142,12 +237,32 @@ ObjectId Simulation::spawn(ra::rules::TypeKind kind, int type, int house, Cell c
 			std::sscanf(foundation.c_str(), "%dx%d", &fw, &fh);
 		for (int y = 0; y < fh; ++y)
 			for (int x = 0; x < fw; ++x)
-				if (ra::world::MapGrid::in_grid(cell.x + x, cell.y + y))
+				if (ra::world::MapGrid::in_grid(cell.x + x, cell.y + y)) {
 					blocked_[cell_index({ int16_t(cell.x + x), int16_t(cell.y + y) })] = 1;
+					building_at_[cell_index({ int16_t(cell.x + x), int16_t(cell.y + y) })] = o.id;
+				}
 	} else {
 		occupy(objects_.back(), cell);
+		mark_neighbours(objects_.back()); // FootClass::Unlimbo counts the unit in the cells around it
 	}
 	return o.id;
+}
+
+void Simulation::mark_neighbours(Object& o)
+{
+	// Foot 0x4D7170 / 0x4D85D0: take the unit out of the counts around its last cell and add it around
+	// the cell it is in now (the cell itself isn't counted).
+	const auto add = [&](Cell c, int delta) {
+		for (int dir = 0; dir < 8; ++dir) {
+			const ra::sim::path::Cell n = ra::sim::path::step({ c.x, c.y }, dir);
+			if (ra::world::MapGrid::in_grid(n.x, n.y))
+				near_feet_[cell_index({ int16_t(n.x), int16_t(n.y) })] += uint8_t(delta);
+		}
+	};
+	if (o.neighbour_mark.x >= 0)
+		add(o.neighbour_mark, -1);
+	o.neighbour_mark = o.cell();
+	add(o.neighbour_mark, 1);
 }
 
 void Simulation::spawn_placed_objects()
@@ -264,31 +379,149 @@ bool Simulation::find_free_spot(Cell cell, Coord near, Coord& out)
 // ---------------------------------------------------------------------------------------------
 // Orders
 
+void Simulation::queue_mission(Object& o, Mission mission, bool start_now)
+{
+	// 0x5B35E0: not while waiting (unless the new mission is Guard) or under construction.
+	const Mission cur = o.mission;
+	if ((cur != Mission::Wait || mission != Mission::Guard) && cur != Mission::Construction) {
+		const int m = static_cast<int>(mission);
+		if (mission != Mission::None && (cur != mission || (o.mission_queue != m && o.mission_queue != -1))) {
+			o.mission_queue = m;
+			o.mission_status = 0;
+		}
+		// Starting at once needs the object to be interruptible (vslot 0x200); every mission that can be
+		// given to a unit or infantry here is.
+		if (start_now && cur != Mission::Sticky && cur != Mission::Rescue)
+			commence_mission(o);
+	}
+}
+
+void Simulation::commence_mission(Object& o)
+{
+	if (o.mission_queue == -1)
+		return;
+	o.mission = static_cast<Mission>(o.mission_queue);
+	o.mission_queue = -1;
+	o.mission_status = 0;
+	o.mission_timer_start = static_cast<int32_t>(frame_);
+	o.mission_timer_delay = 0; // the handler runs on the object's next update
+}
+
+int Simulation::mission_delay(Mission mission)
+{
+	static const char* const names[] = { "Sleep", "Attack", "Move", "QMove", "Retreat", "Guard", "Sticky", "Enter", "Capture", "Eaten",
+		"Harvest", "Area Guard", "Return", "Stop", "Ambush", "Hunt", "Unload", "Sabotage", "Construction", "Selling", "Repair",
+		"Rescue", "Missile", "Harmless", "Open", "Patrol", "Paradrop Approach", "Paradrop Overfly", "Wait", "Attack Move",
+		"Spyplane Approach", "Spyplane Overfly" };
+	const int m = static_cast<int>(mission);
+	const double rate = (m >= 0 && m < 32) ? world_->rules.section(names[m], "MissionControlClass").get_double("Rate") : 0.0;
+	const int base = ra::fpu::ftol(ra::fpu::mul(rate, 900.0));
+	return base + random_->ranged(0, 2);
+}
+
+void Simulation::enter_idle_mode(Object& o)
+{
+	// FootClass::EnterIdleMode (0x4D82B0) picks the next mission from the situation; for a unit that has
+	// finished a move this is Guard.
+	o.foot.has_destination = false;
+	queue_mission(o, Mission::Guard, true);
+}
+
+int Simulation::run_mission_handler(Object& o)
+{
+	switch (o.mission) {
+	case Mission::Move: {
+		// FootClass::Mission_Move (0x4D4200): with no destination, a stopped locomotor and no queued mission,
+		// go idle; otherwise run again after delay(Move).
+		const FootState& f = o.foot;
+		const bool moving = f.track_number != -1 || f.has_head_to;
+		if (!f.has_destination && !moving && o.mission_queue == -1) {
+			enter_idle_mode(o);
+			return 1;
+		}
+		return mission_delay(Mission::Move);
+	}
+	case Mission::Guard:
+	case Mission::Sticky:
+		if (o.what == What::Building) {
+			// BuildingClass::Mission_Guard (0x4496B0), armed: a target starts the attack.
+			if (weapon_of(o, 0) >= 0 && !o.target.is_none()) {
+				queue_mission(o, Mission::Attack, false);
+				commence_mission(o);
+				return 1;
+			}
+			return mission_delay(Mission::Guard);
+		}
+		// FootClass::Mission_Guard (0x4D5070) without pending entry orders: while the rearm timer runs, its
+		// remaining time; otherwise delay(Guard). The idle action (infantry idle animations) is not here yet.
+		if (!rearm_ready(o))
+			return o.rearm_delay - (int(frame_) - o.rearm_start);
+		return mission_delay(Mission::Guard);
+	case Mission::Harvest:
+		return harvest_mission(o);
+	case Mission::Attack:
+		if (o.what == What::Building)
+			return building_attack(o);
+		// FootClass::Mission_Attack (0x4D4DC0): no target -> idle; otherwise ApproachTarget and delay(Attack),
+		// halved for short-ranged units 281.6 to 768 leptons from the target.
+		if (o.target.is_none()) {
+			enter_idle_mode(o);
+			return 1;
+		}
+		approach_target(o, false);
+		{
+			int delay = mission_delay(Mission::Attack);
+			if (!o.target.is_none()) {
+				const double d = dist2d(o.location, target_coords(o.target));
+				const bool short_range = (o.what == What::Infantry && info(o).close_range) || weapon_range(o, 0) <= 512;
+				if (short_range && d >= 281.6 && d <= 768.0)
+					delay /= 2;
+			}
+			return delay;
+		}
+	default:
+		return 450; // the stub handlers (0x5B2E10...) return 0x1C2 frames
+	}
+}
+
+void Simulation::mission_ai(Object& o)
+{
+	// The timer is ready when it has run for its delay.
+	const int elapsed = static_cast<int>(frame_) - o.mission_timer_start;
+	if (elapsed < o.mission_timer_delay)
+		return;
+	if (o.health <= 0)
+		return;
+	const int delay = run_mission_handler(o);
+	o.mission_timer_start = static_cast<int32_t>(frame_);
+	o.mission_timer_delay = delay;
+}
+
 void Simulation::order_move(Object& o, Cell destination)
 {
 	FootState& f = o.foot;
-	o.mission = Mission::Move;
 	f.destination = cell_center(destination);
 	f.has_destination = true;
 	f.path.fill(-1);
 	f.path_length = 0;
 	f.path_delay = 0;
+	queue_mission(o, Mission::Move, true);
 }
 
 void Simulation::order_stop(Object& o)
 {
+	// The IDLE event: clear the destination and path. A unit on a track finishes the track (it can only
+	// stop on a cell centre); the Move handler then sends it to Guard.
 	FootState& f = o.foot;
 	f.has_destination = false;
 	f.path.fill(-1);
 	f.path_length = 0;
-	// A unit on a track finishes the track: it can only stop on a cell centre.
-	o.mission = Mission::Guard;
 }
 
 void Simulation::order_guard(Object& o)
 {
 	order_stop(o);
-	o.mission = Mission::Guard;
+	queue_mission(o, Mission::Guard, true);
 }
 
 Event Simulation::move_event(int house, ObjectId unit, Cell destination)
@@ -302,10 +535,8 @@ Event Simulation::move_event(int house, ObjectId unit, Cell destination)
 
 Event Simulation::stop_event(int house, ObjectId unit)
 {
-	MegaMission m;
-	m.whom = Target::object(unit);
-	m.mission = static_cast<uint8_t>(Mission::Stop);
-	return m.to_event(house);
+	// Stop is the IDLE event (P3 section 13.4), not a mission.
+	return Event::with_target(EventType::Idle, house, Target::object(unit));
 }
 
 Event Simulation::guard_event(int house, ObjectId unit)
@@ -314,6 +545,85 @@ Event Simulation::guard_event(int house, ObjectId unit)
 	m.whom = Target::object(unit);
 	m.mission = static_cast<uint8_t>(Mission::Guard);
 	return m.to_event(house);
+}
+
+namespace {
+
+Event production_event(EventType type, int house, TypeRef item, bool with_cell, Cell cell)
+{
+	using ra::rules::TypeKind;
+	Event e;
+	e.type = type;
+	e.house = static_cast<int8_t>(house);
+	const int32_t rtti = item.kind == TypeKind::Aircraft ? 3 : item.kind == TypeKind::Building ? 7 : item.kind == TypeKind::Infantry ? 16 : 40;
+	const int32_t v[3] = { rtti, item.type, 0 };
+	std::memcpy(e.data.data(), v, sizeof(v));
+	if (with_cell) {
+		const int16_t xy[2] = { cell.x, cell.y };
+		std::memcpy(e.data.data() + 12, xy, sizeof(xy));
+	}
+	return e;
+}
+
+} // namespace
+
+Event Simulation::produce_event(int house, TypeRef item) { return production_event(EventType::Produce, house, item, false, {}); }
+Event Simulation::suspend_event(int house, TypeRef item) { return production_event(EventType::Suspend, house, item, false, {}); }
+Event Simulation::abandon_event(int house, TypeRef item) { return production_event(EventType::Abandon, house, item, false, {}); }
+Event Simulation::place_event(int house, TypeRef item, Cell cell) { return production_event(EventType::Place, house, item, true, cell); }
+Event Simulation::repair_event(int house, ObjectId building) { return Event::with_target(EventType::Repair, house, Target::object(building)); }
+Event Simulation::sell_event(int house, ObjectId building) { return Event::with_target(EventType::Sell, house, Target::object(building)); }
+
+Event Simulation::attack_event(int house, ObjectId unit, Target target)
+{
+	MegaMission m;
+	m.whom = Target::object(unit);
+	m.mission = static_cast<uint8_t>(Mission::Attack);
+	m.target = target;
+	return m.to_event(house);
+}
+
+void Simulation::order_attack(Object& o, const Target& target)
+{
+	set_target(o, target);
+	queue_mission(o, Mission::Attack, true);
+}
+
+int Simulation::building_attack(Object& o)
+{
+	// BuildingClass::Mission_Attack (0x44ACF0) for ordinary buildings (U section 9.6).
+	if (o.target.is_none()) {
+		queue_mission(o, Mission::Guard, false);
+		commence_mission(o);
+		return 1;
+	}
+	const int w = select_weapon(o, o.target);
+	const int e = get_fire_error(o, o.target, w, true);
+	const auto aim = [&] {
+		if (!o.target.is_none())
+			o.primary_facing.set_desired(uint16_t(dir_to(o, target_coords(o.target))), frame_);
+	};
+	switch (e) {
+	case kFireOk:
+		fire(o, o.target, w);
+		o.last_fire_frame = int(frame_);
+		return 1;
+	case kFireAmmo:
+	case kFireIllegal:
+	case kFireCant:
+	case kFireRange:
+		set_target(o, Target::none());
+		queue_mission(o, Mission::Guard, false);
+		commence_mission(o);
+		return 1;
+	case kFireFacing:
+	case kFireRearm:
+		aim();
+		return 2;
+	default:
+		aim();
+		return 1;
+	}
 }
 
 void Simulation::execute(const Event& event)
@@ -330,15 +640,75 @@ void Simulation::execute(const Event& event)
 			if (m.destination.is_cell())
 				order_move(*o, { int16_t(m.destination.cell_x()), int16_t(m.destination.cell_y()) });
 			break;
-		case Mission::Stop: order_stop(*o); break;
+		case Mission::Stop: order_stop(*o); break; // (an old-style stop order; the IDLE event is the usual one)
 		case Mission::Guard:
 		case Mission::AreaGuard: order_guard(*o); break;
+		case Mission::Attack: order_attack(*o, m.target); break;
 		default: break; // the other missions come with their phases
 		}
 		break;
 	}
+	case EventType::Idle: {
+		Object* o = find(event.target().id);
+		if (o && o->alive && o->house == event.house)
+			order_stop(*o);
+		break;
+	}
+	case EventType::Produce:
+	case EventType::Suspend:
+	case EventType::Abandon:
+	case EventType::AbandonAll: {
+		// RTTI, heap id, IsNaval (three int32). AbstractType: AircraftType 3, BuildingType 7, InfantryType 16, UnitType 40.
+		int32_t v[3];
+		std::memcpy(v, event.data.data(), sizeof(v));
+		const TypeKind kind = v[0] == 3 ? TypeKind::Aircraft : v[0] == 7 ? TypeKind::Building : v[0] == 16 ? TypeKind::Infantry : TypeKind::Vehicle;
+		const TypeRef item { kind, v[1] };
+		if (event.house < 0 || size_t(event.house) >= houses_.size() || item.type < 0 || item.type >= world_->rules.type_count(kind))
+			break;
+		const Category cat = category_of(type_info_of(item), kind);
+		if (event.type == EventType::Produce)
+			start_production(event.house, item);
+		else if (event.type == EventType::Suspend)
+			houses_[size_t(event.house)].factories[size_t(cat)].suspended ? resume_production(event.house, cat) : suspend_production(event.house, cat);
+		else {
+			abandon_production(event.house, cat);
+			if (event.type == EventType::AbandonAll)
+				houses_[size_t(event.house)].factories[size_t(cat)].queue.clear();
+		}
+		break;
+	}
+	case EventType::Place: {
+		int32_t v[3];
+		int16_t xy[2];
+		std::memcpy(v, event.data.data(), sizeof(v));
+		std::memcpy(xy, event.data.data() + 12, sizeof(xy));
+		const TypeRef item { TypeKind::Building, v[1] };
+		if (event.house < 0 || size_t(event.house) >= houses_.size() || item.type < 0 || item.type >= world_->rules.type_count(TypeKind::Building))
+			break;
+		place_building(event.house, category_of(type_info_of(item), TypeKind::Building), { xy[0], xy[1] });
+		break;
+	}
+	case EventType::Repair: {
+		Object* b = find(event.target().id);
+		if (b && b->alive && b->what == What::Building && b->house == event.house)
+			toggle_repair(*b);
+		break;
+	}
+	case EventType::Sell: {
+		Object* b = find(event.target().id);
+		if (b && b->alive && b->what == What::Building && b->house == event.house)
+			sell_building(*b);
+		break;
+	}
+	case EventType::Scatter: {
+		// SCATTER (7): the unit scatters with no source, forced (as RA1's handler does).
+		Object* o = find(event.target().id);
+		if (o && o->alive && o->house == event.house)
+			scatter(*o, nullptr, true, true);
+		break;
+	}
 	default:
-		break; // the other event types come with their phases
+		break; // the other event types (SCATTER among them) come with their phases
 	}
 }
 
@@ -360,7 +730,7 @@ bool Simulation::level_rule(Cell from, Cell to, int unit_level) const
 	return false;
 }
 
-Move Simulation::can_enter(const Object& o, Cell to, int dir, Cell from) const
+Move Simulation::can_enter(const Object& o, Cell to, int dir, Cell from, int level) const
 {
 	// Unit 0x73F0A0 / Infantry 0x51BF90 (U section 10, 4B-fix). Implemented: tubes (none yet), the
 	// height rule, the playable edge, buildings and trees, other objects, infantry spots, the land speed.
@@ -370,11 +740,13 @@ Move Simulation::can_enter(const Object& o, Cell to, int dir, Cell from) const
 	if (dir == 8)
 		return Move::No; // no tubes or tunnels yet
 	const bool infantry = o.kind == ra::rules::TypeKind::Infantry;
-	const int unit_level = world_->grid.at(from).level;
+	const int unit_level = level >= 0 ? level : int(world_->grid.at(from).level);
 	if (!level_rule(from, to, unit_level))
 		return Move::No;
-	// An object inside the playable area may not leave it.
-	if (world_->grid.in_local(from.x, from.y) && !world_->grid.in_local(to.x, to.y))
+	// An object in the playfield may not enter a cell outside the usable area (0x578540 with the cell's
+	// height; NoShroudMoves and vslot 0x320 aside). Being in the playfield (+0x3D5) is taken as standing
+	// inside the usable area.
+	if (world_->grid.in_local(from.x, from.y, true) && !world_->grid.in_local(to.x, to.y, true))
 		return Move::No;
 	if (blocked_terrain(to))
 		return Move::No; // a building or a tree
@@ -450,15 +822,58 @@ Move Simulation::can_enter(const Object& o, Cell to, int dir, Cell from) const
 
 bool Simulation::find_path(Object& o, Cell goal)
 {
-	UnitSearchMap map(*this, o);
-	ra::sim::path::Query q;
+	FootState& f = o.foot;
 	const Cell from = o.cell();
-	q.start = { from.x, from.y };
-	q.goal = { goal.x, goal.y };
+	// UpdatePathfinding (0x4D3920) gives up at once when the destination is in another zone.
+	if (!same_zone(o, goal)) {
+		f.path.fill(-1);
+		f.path_length = 0;
+		return false;
+	}
+	// AStarClass::FindPath (0x42C900): the hierarchical search runs for units that aren't trains, are in
+	// the playfield and search between cells of the usable area. Different zones then mean no path at
+	// all; a failed hierarchical search turns the corridor off.
+	const TypeInfo& t = info(o);
+	const ra::sim::path::Cell a { from.x, from.y }, b { goal.x, goal.y };
+	const int mz = t.movement_zone;
+	bool hierarchical = !t.train && world_->grid.in_local(from.x, from.y, true) && world_->grid.in_local(goal.x, goal.y, true);
+	zones_.clear_blocked();
+	if (zones_.movement_zone(a, mz) != zones_.movement_zone(b, mz)) {
+		if (hierarchical) {
+			f.path.fill(-1);
+			f.path_length = 0;
+			return false;
+		}
+	} else if (hierarchical && !zones_.search(a, b, mz)) {
+		hierarchical = false;
+	}
+	ra::sim::path::Query q;
+	q.start = a;
+	q.goal = b;
 	q.start_level = world_->grid.at(from).level;
 	q.goal_level = world_->grid.at(goal).level;
-	const ra::sim::path::Result r = ra::sim::path::find_path(map, q);
-	FootState& f = o.foot;
+	q.train = t.train;
+	// A cell search that fails inside the corridor is retried, up to five attempts in all, after blocking
+	// the links around the furthest cell it reached (0x42CCD0) and searching the zones again.
+	ra::sim::path::Result r;
+	for (int attempt = 0;;) {
+		UnitSearchMap map(*this, o, hierarchical);
+		q.route = hierarchical ? &zones_.route(0) : nullptr;
+		r = ra::sim::path::find_path(map, q);
+		if (r.found || !hierarchical)
+			break;
+		++attempt;
+		// CanEnterCell there has no from cell (the cell behind is used) and the cell's own level.
+		hierarchical = zones_.block_around(r.progress, mz, [&](ra::sim::path::Cell to, int dir) {
+			const ra::sim::path::Cell back = ra::sim::path::step(to, (dir + 4) & 7);
+			const Cell c { int16_t(to.x), int16_t(to.y) };
+			return can_enter(o, c, dir, Cell { int16_t(back.x), int16_t(back.y) }, world_->grid.at(c).level) == Move::Ok;
+		});
+		if (attempt >= 5)
+			break;
+		if (hierarchical && !zones_.search(a, b, mz))
+			break;
+	}
 	f.path.fill(-1);
 	f.path_length = 0;
 	if (!r.found)
@@ -477,7 +892,9 @@ int Simulation::current_speed(const Object& o) const
 {
 	const TypeInfo& t = info(o);
 	// ftol(Type.Speed * HouseType.SpeedXMult * this.SpeedMultiplier), both multipliers 1.0 here, then * SpeedPercentage.
-	const int base = ra::fpu::ftol(ra::fpu::mul(ra::fpu::mul(double(t.speed), 1.0), 1.0));
+	int base = ra::fpu::ftol(ra::fpu::mul(ra::fpu::mul(double(t.speed), 1.0), 1.0));
+	if (has_ability(o, 0)) // FASTER
+		base = ra::fpu::ftol(ra::fpu::mul(double(base), combat_.rules().veteran_speed));
 	return ra::fpu::ftol(ra::fpu::mul(double(base), o.foot.speed_percentage));
 }
 
@@ -520,18 +937,66 @@ void Simulation::enter_cell(Object& o, Cell c)
 
 void Simulation::reveal_around(const Object& o)
 {
+	// TechnoClass::See (0x70ADC0): SightIncrease = Z / LeptonsPerSightIncrease * 10 (a char, in percent);
+	// sight = ftol(Sight * (SightIncrease * 0.01 + 1.0)). Veterancy sight (VeteranSight) is not applied yet.
 	const TypeInfo& t = info(o);
-	if (t.sight > 0)
-		shroud_.reveal_area(o.cell().x, o.cell().y, t.sight);
+	const ra::rules::RuleObject general = world_->rules.section("General");
+	const int per_increase = std::max(1, general.get_int("LeptonsPerSightIncrease"));
+	const int increase = static_cast<int8_t>((o.location.z / per_increase) * 10);
+	const int sight = ra::fpu::ftol(ra::fpu::mul(double(t.sight), ra::fpu::add(ra::fpu::mul(double(increase), 0.01), 1.0)));
+	if (sight != 0)
+		shroud_.reveal_from(world_->grid, o.location, sight, general.get_bool("RevealByHeight"));
 }
 
 void Simulation::update_objects()
 {
-	for (Object& o : objects_) {
+	// By index: firing adds bullets to the end of the list, and they update in the same pass.
+	for (size_t i = 0; i < objects_.size(); ++i) {
+		Object& o = objects_[i];
 		if (!o.alive || o.in_limbo)
 			continue;
-		if (o.what == What::Unit || o.what == What::Infantry)
-			update_foot(o);
+		if (o.what == What::Bullet) {
+			update_bullet(o);
+			continue;
+		}
+		// TechnoClass::Update: a target to drop, the mission handlers, then the targeting timer.
+		const bool armed = o.what != What::Building || weapon_of(o, 0) >= 0;
+		if (o.what == What::Infantry)
+			infantry_stage(o);
+		if (o.what == What::Building)
+			update_building(o);
+		if (should_self_heal(o))
+			++o.health; // TechnoClass::Update: +1 HP per step (U section 12.2)
+		if (!o.target.is_none() && o.should_lose_target
+			&& (o.mission == Mission::Sleep || o.mission == Mission::Enter || o.mission == Mission::Stop || o.mission == Mission::Ambush
+				|| o.mission == Mission::Unload || o.mission == Mission::Construction || o.mission == Mission::Selling || o.mission == Mission::Repair
+				|| o.mission == Mission::Missile || o.mission == Mission::Harmless || o.mission == Mission::Wait || o.mission == Mission::Open))
+			set_target(o, Target::none());
+		if (o.what != What::Building || armed)
+			mission_ai(o);
+		if (!o.alive)
+			continue;
+		if (armed)
+			update_targeting(o);
+		if (o.what == What::Unit || o.what == What::Infantry || o.what == What::Aircraft) {
+			update_foot(o); // FootClass::Update runs the locomotor after TechnoClass::Update
+			if (o.cell() != o.neighbour_mark)
+				mark_neighbours(o);
+		}
+		if (o.alive) {
+			if (o.what == What::Unit) {
+				unit_fire_step(o);
+				unit_turret_step(o);
+			} else if (o.what == What::Infantry) {
+				if (o.is_firing && o.stage_rate == 0) {
+					o.is_firing = false;
+					play_sequence(o, 0);
+				}
+				infantry_fire_step(o);
+			} else if (o.what == What::Building) {
+				building_fire_step(o);
+			}
+		}
 		sync_facing(o);
 	}
 	++frame_;
@@ -548,9 +1013,20 @@ void Simulation::update_foot(Object& o)
 	case LocomotorKind::Mech:
 		walk_process(o);
 		break;
+	case LocomotorKind::Hover:
+		hover_process(o);
+		break;
+	case LocomotorKind::Jumpjet:
+		jumpjet_process(o);
+		break;
+	case LocomotorKind::Fly:
+		fly_process(o);
+		break;
 	default:
-		break; // the other locomotors come later
+		break; // Teleport, Tunnel, Rocket and DropPod need animations and weapons
 	}
+	if (o.alive && (info(o).crusher || info(o).omni_crusher))
+		try_crush(o);
 }
 
 void Simulation::drive_process(Object& o)
@@ -570,8 +1046,6 @@ void Simulation::drive_process(Object& o)
 		// Arrived: Destination == Location.
 		f.has_destination = false;
 		f.path.fill(-1);
-		if (o.mission == Mission::Move)
-			o.mission = Mission::Guard;
 		return;
 	}
 	// Turning in place: wait while the body rotates.
@@ -773,8 +1247,6 @@ void Simulation::walk_process(Object& o)
 		if (here == dest) {
 			f.has_destination = false;
 			f.path.fill(-1);
-			if (o.mission == Mission::Move)
-				o.mission = Mission::Guard;
 			return;
 		}
 		if (!f.has_path()) {
@@ -856,6 +1328,8 @@ void Simulation::walk_process(Object& o)
 void Simulation::attach(GameLoop& loop)
 {
 	loop.logic().set_step(LogicStep::LogicObjects, [this] { update_objects(); });
+	loop.logic().set_step(LogicStep::Factories, [this] { update_factories(); });
+	loop.logic().set_step(LogicStep::Houses, [this] { update_houses(); });
 	loop.crc_terms = [this](FrameCrc& crc) { add_crc_terms(crc); };
 }
 

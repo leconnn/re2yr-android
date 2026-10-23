@@ -14,13 +14,14 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 
 namespace ra::sim {
 
 using ObjectId = int32_t; // 0 = none; ids are handed out in creation order starting at 1
 
 // AbstractType values (the WhatAmI of an object, used in the CRC).
-enum class What : uint8_t { Unit = 1, Aircraft = 2, Building = 6, Infantry = 15 };
+enum class What : uint8_t { Unit = 1, Aircraft = 2, Building = 6, Bullet = 8, Infantry = 15 };
 
 // MissionType (U section 2.1).
 enum class Mission : uint8_t {
@@ -119,8 +120,40 @@ struct FootState {
 
 	bool rotating = false;         // Drive IsRotating: waiting for a turn in place to finish
 
+	// Hover, Jumpjet and Fly (U sections 10.4 to 10.6).
+	double loco_speed = 0.0;       // Hover / Fly: the speed fraction; Jumpjet: CurrentSpeed in leptons
+	double loco_max = 0.0;         // Jumpjet MaxSpeed
+	double hover_vz = 0.0;         // Hover vertical velocity (+0x60)
+	double wobble = 0.0;           // Jumpjet wobble phase
+	int jj_state = 0;              // 0 Grounded, 1 Ascending, 2 Hovering, 3 Cruising, 4 Descending, 5 Crashing
+	bool landing = false;          // Fly: IsLanding
+
 	int path_delay = 0;            // frames until the next pathfinding attempt
 	Cell current_cell {};          // CurrentMapCoords: the cell the unit is registered in
+};
+
+// A projectile in flight (BulletClass, U section 7). Bullets are objects too, so they take their place in
+// the logic list and use ids from the same counter.
+struct BulletState {
+	ObjectId owner = 0;            // the firing object (0 if it is gone)
+	int owner_house = -1;
+	Target target {};              // an object or a cell
+	int weapon = -1;               // CombatData indices
+	int projectile = -1;
+	int warhead = -1;
+	int damage = 0;
+	int speed = 0;                 // leptons per frame
+	double vx = 0, vy = 0, vz = 0; // velocity, leptons per frame
+	Coord source {};
+	Coord target_coords {};
+	int arm_start = 0;             // frame the arming timer started
+	int arm_delay = 0;
+	bool course_lock = false;
+	int course_lock_frames = 0;
+	double near_sum = 0.0;         // the miss detector
+	int near_frames = 0;
+	double last_distance = 0.0;    // proximity check
+	int age = 0;
 };
 
 struct Object {
@@ -138,9 +171,44 @@ struct Object {
 	int health = 0;                // strength points
 	int sub_cell = 0;              // infantry spot in the cell (0 centre, 2, 3, 4 others)
 	Mission mission = Mission::Guard;
+	int mission_queue = -1;        // MissionQueue (+0xB4): the mission that starts next, -1 none
+	int mission_status = 0;        // MissionStatus (+0xBC): the handler's own state machine
+	int32_t mission_timer_start = 0; // CDTimer (+0xC8, +0xD0): the handler runs when it has run for the delay
+	int32_t mission_timer_delay = 0;
 	bool alive = true;
 	bool in_limbo = false;
 	FootState foot {};
+	Cell neighbour_mark { -1, -1 }; // Foot +0x55C: the cell whose neighbours count this unit (BlockedNeighbours)
+
+	// Combat (Techno).
+	Target target {};              // TechnoClass +0x...: what it is attacking
+	int32_t rearm_start = 0;       // RearmTimer (CDTimer): ready when frame - start >= delay
+	int32_t rearm_delay = 0;
+	int burst_index = 0;           // CurrentBurstIndex
+	int ammo = -1;                 // -1 unlimited
+	ObjectId last_attacker = 0;
+	// Harvesting (U section 9.7).
+	std::array<double, 4> storage {};   // bales per Tiberium type
+	bool is_harvesting = false;
+	int32_t load_start = -1, load_delay = 0;
+	ObjectId dock_building = 0;
+	bool repairing = false;        // the wrench is on (BuildingClass::IsRepairing)
+	double veterancy = 0.0;        // VeterancyStruct: <1 rookie, 1..2 veteran, >=2 elite
+	bool should_lose_target = false; // ShouldLoseTargetNow
+	int32_t targeting_start = 0;   // TargetingTimer
+	int32_t targeting_delay = 0;
+	int estimated_health = 0;      // EstimatedHealth (damage already on its way)
+	int32_t last_fire_frame = -1000; // LastFireBulletFrame
+	bool turret_busy = false;      // UnitClass +0x6AF (the turret is turning)
+	Coord archive {};              // ArchiveTarget: where Area Guard returns to
+	bool has_archive = false;
+	// Infantry animation (SequenceAnim and its StageClass): the shot comes on the fire frame.
+	bool is_firing = false;
+	int sequence = -1;
+	int stage = 0;
+	int32_t stage_start = 0;
+	int stage_rate = 0;            // frames per stage; 0 = stopped
+	BulletState bullet {};         // used when what == Bullet
 
 	Cell cell() const { return ra::cell_of(location); }
 };

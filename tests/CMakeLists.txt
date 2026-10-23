@@ -11,6 +11,7 @@ add_executable(ra_tests
 	sim/loop_test.cpp
 	sim/objects_test.cpp
 	sim/path_test.cpp
+	sim/zones_test.cpp
 	game/install_test.cpp
 	vfs/mix_test.cpp
 	voxel/voxel_test.cpp

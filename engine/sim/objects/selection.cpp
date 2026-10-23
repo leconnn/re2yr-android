@@ -19,7 +19,7 @@ void Selection::add_id(ObjectId id)
 bool Selection::selectable(const Simulation& sim, const Object& o, int house)
 {
 	(void)sim;
-	return o.alive && !o.in_limbo && o.house == house;
+	return o.alive && !o.in_limbo && o.what != What::Bullet && o.house == house;
 }
 
 void Selection::click(const Simulation& sim, int house, Coord at, int radius, bool add)
